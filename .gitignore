@@ -1,4 +1,8 @@
 rotup-dev.db
 rotup-dev.db-shm
 rotup-dev.db-wal
+rotup-staging/
+rotup-secrets/
 .cache/
+rotupd
+rotupd.exe

@@ -1,0 +1,23 @@
+{{template "layout_top" .}}
+<h1>Sources</h1>
+<p><a href="/sources/new">Add a source</a></p>
+{{if .Body}}
+<table>
+  <tr><th>Name</th><th>SMB target</th><th>Staging destination</th><th>Policy</th><th>Enabled</th><th>Credential</th><th>Staging state</th><th>Last collection</th></tr>
+  {{range .Body}}
+  <tr>
+    <td><a href="/sources/{{.Source.ID}}">{{.Source.Name}}</a>{{if .Busy}} <span class="busy">(running)</span>{{end}}</td>
+    <td class="mono">{{.Source.Host}}/{{.Source.RemotePath}}</td>
+    <td class="mono">{{.Source.StagingRelativePath}}</td>
+    <td>{{.Source.ReconciliationPolicy}}</td>
+    <td>{{if .Source.Enabled}}yes{{else}}<span class="muted">no</span>{{end}}</td>
+    <td>{{if .HasCredential}}stored{{else}}<span class="muted">none</span>{{end}}</td>
+    <td><span class="{{stagingClass .Source.StagingStatus}}">{{.Source.StagingStatus}}</span></td>
+    <td>{{if .LastRun}}{{template "run_status" .LastRun}} {{timestamp .LastRun.FinishedAt}}{{else}}—{{end}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p>No sources are configured yet.</p>
+{{end}}
+{{template "layout_bottom" .}}

@@ -1,0 +1,47 @@
+{{template "layout_top" .}}
+{{with .Body}}
+<h1>Run &mdash; {{.Run.Kind}}</h1>
+{{if .Refresh}}<p class="banner notice">This run is still executing. The page refreshes automatically, and closing the browser does not affect it.</p>{{end}}
+<table>
+  <tr><th>Run ID</th><td class="mono">{{.Run.ID}}</td></tr>
+  <tr><th>Status</th><td>{{template "run_status" .Run}}</td></tr>
+  <tr><th>Trigger</th><td>{{.Run.TriggerKind}}</td></tr>
+  <tr><th>Source</th><td>{{if .Source}}<a href="/sources/{{.Source.ID}}">{{.Source.Name}}</a>{{else}}&mdash;{{end}}</td></tr>
+  <tr><th>Requested</th><td>{{timestamp .Run.RequestedAt}}</td></tr>
+  <tr><th>Started</th><td>{{timestamp .Run.StartedAt}}</td></tr>
+  <tr><th>Finished</th><td>{{timestamp .Run.FinishedAt}}</td></tr>
+  <tr><th>Duration</th><td>{{duration .Run.Duration}}</td></tr>
+  <tr><th>Summary</th><td>{{.Run.Summary}}</td></tr>
+  {{if .Run.SafeError}}
+  <tr><th>Error class</th><td>{{.Run.ErrorClass}} / {{.Run.ErrorCode}}</td></tr>
+  <tr><th>Error</th><td>{{.Run.SafeError}}</td></tr>
+  {{end}}
+</table>
+
+{{with .Result}}
+<h2>Source result</h2>
+<table>
+  <tr><th>Status</th><td>{{template "run_status" .}}</td></tr>
+  <tr><th>Files scanned at source</th><td>{{.FilesScanned}}</td></tr>
+  <tr><th>Files copied</th><td>{{.FilesCopied}}</td></tr>
+  <tr><th>Bytes copied</th><td>{{bytes .BytesCopied}}</td></tr>
+  <tr><th>Files deleted or archived</th><td>{{.FilesDeletedOrArchived}}</td></tr>
+  <tr><th>Engine checks</th><td>{{.EngineChecks}}</td></tr>
+  <tr><th>Engine errors</th><td>{{.EngineErrors}}</td></tr>
+  <tr><th>Staging state version</th><td>{{if .StagingStateVersion}}{{.StagingStateVersion}}{{else}}not published{{end}}</td></tr>
+  {{if .Warnings}}<tr><th>Warnings</th><td><ul class="warn-list">{{range .Warnings}}<li>{{.}}</li>{{end}}</ul></td></tr>{{end}}
+</table>
+{{end}}
+
+{{if eq .Run.Kind "COLLECTION"}}
+<h2>Revision batch</h2>
+{{with .Batch}}
+<p class="mono">{{.RelativePath}}</p>
+<p>{{.ItemCount}} items, {{bytes .ByteCount}} &mdash; reconciliation completed:
+  {{if .ReconciliationCompleted}}<span class="ok">yes</span>{{else}}<span class="bad">no, this batch may be incomplete</span>{{end}}</p>
+{{else}}
+<p class="muted">This run created no revision batch.</p>
+{{end}}
+{{end}}
+{{end}}
+{{template "layout_bottom" .}}

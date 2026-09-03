@@ -1,0 +1,55 @@
+{{template "layout_top" .}}
+{{with .Body}}
+<h1>Staging &mdash; {{.Source.Name}}</h1>
+<p>
+  <a href="/sources/{{.Source.ID}}/staging?area=current">current</a> &middot;
+  <a href="/sources/{{.Source.ID}}/staging?area=revisions">revisions</a> &middot;
+  <a href="/sources/{{.Source.ID}}">back to source</a>
+</p>
+<p class="mono">{{.Area}}/{{.Listing.RelativePath}}</p>
+{{if .Listing.HasParent}}
+<p><a href="/sources/{{.Source.ID}}/staging?area={{.Area}}&amp;path={{.Listing.Parent}}">up one level</a></p>
+{{end}}
+{{if .Listing.Missing}}
+<p class="muted">This directory does not exist yet.</p>
+{{else if .Listing.Entries}}
+<table>
+  <tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th></tr>
+  {{$source := .Source}}{{$area := .Area}}{{$base := .Listing.RelativePath}}
+  {{range .Listing.Entries}}
+  <tr>
+    <td class="mono">
+      {{if .IsDir}}<a href="/sources/{{$source.ID}}/staging?area={{$area}}&amp;path={{if $base}}{{$base}}/{{end}}{{.Name}}">{{.Name}}/</a>
+      {{else}}{{.Name}}{{end}}
+    </td>
+    <td>{{if .IsDir}}directory{{else if .IsSymlink}}symbolic link{{else if .IsRegular}}file{{else}}other{{end}}</td>
+    <td>{{if .IsRegular}}{{bytes .Size}}{{else}}&mdash;{{end}}</td>
+    <td>{{timestamp .ModifiedAt}}</td>
+  </tr>
+  {{end}}
+</table>
+{{if .Listing.Truncated}}<p class="muted">The listing was truncated.</p>{{end}}
+{{else}}
+<p class="muted">This directory is empty.</p>
+{{end}}
+
+<h2>Revision batches</h2>
+{{if .Batches}}
+<table>
+  <tr><th>Created</th><th>Path</th><th>Items</th><th>Size</th><th>Reconciliation completed</th></tr>
+  {{range .Batches}}
+  <tr>
+    <td>{{timestamp .CreatedAt}}</td>
+    <td class="mono">{{.RelativePath}}</td>
+    <td>{{.ItemCount}}</td>
+    <td>{{bytes .ByteCount}}</td>
+    <td>{{if .ReconciliationCompleted}}yes{{else}}<span class="bad">no</span>{{end}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p class="muted">No revision batches have been recorded.</p>
+{{end}}
+<p class="muted">ROTUP lists staging read-only and never serves staged file contents over HTTP. Symbolic links are shown but never followed.</p>
+{{end}}
+{{template "layout_bottom" .}}

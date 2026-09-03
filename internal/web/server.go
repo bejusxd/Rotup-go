@@ -1,35 +1,91 @@
+// Package web serves the local administration UI. Handlers call application use
+// cases and render validated view models; they never call adapters directly and
+// they never render secret material.
 package web
 
 import (
 	"context"
 	"encoding/json"
-	"html/template"
+	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/bejusxd/rotup/internal/collector"
 	"github.com/bejusxd/rotup/internal/domain"
+	"github.com/bejusxd/rotup/internal/staging"
 )
 
-// StatusSource is the small application seam needed by the M1 HTTP handlers.
+// StatusSource is the application seam the dashboard and health endpoint need.
 type StatusSource interface {
 	ApplicationStatus() string
 	DatabaseHealth(context.Context) error
 	LatestRun(context.Context) (*domain.Run, error)
 }
 
-type handler struct {
-	source  StatusSource
-	version string
-	page    *template.Template
+// Repository is the read seam for configuration and history.
+type Repository interface {
+	ListSources(ctx context.Context) ([]domain.Source, error)
+	Source(ctx context.Context, id string) (*domain.Source, error)
+	CredentialRef(ctx context.Context, sourceID string) (domain.CredentialRef, error)
+	Run(ctx context.Context, id string) (*domain.Run, error)
+	ListRuns(ctx context.Context, limit int) ([]domain.Run, error)
+	ListRunsForSource(ctx context.Context, sourceID string, limit int) ([]domain.Run, error)
+	LatestCollectionForSource(ctx context.Context, sourceID string) (*domain.Run, error)
+	SourceResult(ctx context.Context, runID, sourceID string) (*domain.SourceResult, error)
+	ListRevisionBatches(ctx context.Context, sourceID string, limit int) ([]domain.RevisionBatch, error)
+	ListEvents(ctx context.Context, limit int) ([]domain.Event, error)
 }
 
-type dashboardData struct {
-	Name              string
-	Version           string
-	ApplicationStatus string
-	DatabaseStatus    string
-	LatestRun         *domain.Run
-	Error             string
+// SourceAdmin is the configuration and credential use-case seam.
+type SourceAdmin interface {
+	Create(ctx context.Context, input collector.SourceInput) (string, error)
+	Update(ctx context.Context, id string, input collector.SourceInput) error
+	ReplaceCredential(ctx context.Context, sourceID, password string) error
+	ClearCredential(ctx context.Context, sourceID string) error
+}
+
+// Collector starts manual runs. Each call returns immediately with a durable
+// run identifier so the browser never has to hold a request open.
+type Collector interface {
+	StartConnectionTest(ctx context.Context, sourceID string) (string, error)
+	StartCollection(ctx context.Context, sourceID string) (string, error)
+	Busy(sourceID string) bool
+}
+
+// StagingBrowser is the read-only staging inspection seam. Only the staging
+// layout may turn a source and a relative path into a real directory.
+type StagingBrowser interface {
+	CurrentDir(source domain.Source) (string, error)
+	SourceRevisionsDir(sourceID string) (string, error)
+	List(base, relative string) (staging.Listing, error)
+}
+
+// EngineStatus reports the discovered transfer engine for the dashboard.
+type EngineStatus struct {
+	Name             string
+	Version          string
+	Available        bool
+	DiscoveredOnPath bool
+	Detail           string
+}
+
+// Deps are everything the HTTP layer needs.
+type Deps struct {
+	Version string
+	Status  StatusSource
+	Repo    Repository
+	Admin   SourceAdmin
+	Runner  Collector
+	Staging StagingBrowser
+	Engine  func() EngineStatus
+	Logger  *slog.Logger
+}
+
+type handler struct {
+	deps      Deps
+	templates *templateSet
+	csrf      *csrfGuard
+	logger    *slog.Logger
 }
 
 type healthResponse struct {
@@ -38,71 +94,87 @@ type healthResponse struct {
 	ApplicationStatus string `json:"application_status"`
 }
 
-const dashboardTemplate = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ROTUP</title>
-</head>
-<body>
-  <main>
-    <h1>{{.Name}}</h1>
-    <p>Version: {{.Version}}</p>
-    <p>Application status: {{.ApplicationStatus}}</p>
-    <p>Database status: {{.DatabaseStatus}}</p>
-    {{if .Error}}<p>Dashboard error: {{.Error}}</p>{{end}}
-    <section>
-      <h2>Latest run</h2>
-      {{with .LatestRun}}
-        <p><strong>{{.Kind}}</strong> — {{.Status}}</p>
-        <p>{{.Summary}}</p>
-        <p>Finished: {{.FinishedAt.Format "2006-01-02T15:04:05Z07:00"}}</p>
-      {{else}}
-        <p>No runs recorded.</p>
-      {{end}}
-    </section>
-  </main>
-</body>
-</html>`
-
-// NewHandler returns the complete M1 HTTP handler.
-func NewHandler(source StatusSource, version string) (http.Handler, error) {
-	page, err := template.New("dashboard").Parse(dashboardTemplate)
+// NewHandler builds the complete HTTP handler.
+func NewHandler(deps Deps) (http.Handler, error) {
+	templates, err := loadTemplates()
 	if err != nil {
 		return nil, err
 	}
-	h := &handler{source: source, version: version, page: page}
+	logger := deps.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	h := &handler{
+		deps:      deps,
+		templates: templates,
+		csrf:      newCSRFGuard(),
+		logger:    logger.With("component", "web"),
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", h.health)
-	mux.HandleFunc("/", h.dashboard)
-	return mux, nil
+	mux.HandleFunc("GET /healthz", h.health)
+	mux.HandleFunc("GET /{$}", h.dashboard)
+
+	if deps.Repo != nil {
+		mux.HandleFunc("GET /sources", h.listSources)
+		mux.HandleFunc("GET /sources/new", h.newSourceForm)
+		mux.HandleFunc("POST /sources", h.createSource)
+		mux.HandleFunc("GET /sources/{id}", h.showSource)
+		mux.HandleFunc("POST /sources/{id}", h.updateSource)
+		mux.HandleFunc("POST /sources/{id}/credential", h.replaceCredential)
+		mux.HandleFunc("POST /sources/{id}/credential/clear", h.clearCredential)
+		mux.HandleFunc("POST /sources/{id}/test", h.startConnectionTest)
+		mux.HandleFunc("POST /sources/{id}/collect", h.startCollection)
+		mux.HandleFunc("GET /sources/{id}/staging", h.browseStaging)
+		mux.HandleFunc("GET /runs", h.listRuns)
+		mux.HandleFunc("GET /runs/{id}", h.showRun)
+	}
+
+	return securityHeaders(mux), nil
+}
+
+// securityHeaders applies the response hardening the local UI needs. There is
+// no inline script anywhere in the templates, so the policy can forbid it.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		header := response.Header()
+		header.Set("Content-Security-Policy",
+			"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+		header.Set("X-Content-Type-Options", "nosniff")
+		header.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(response, request)
+	})
+}
+
+type dashboardData struct {
+	Name              string
+	Version           string
+	ApplicationStatus string
+	DatabaseStatus    string
+	LatestRun         *domain.Run
+	Engine            EngineStatus
+	Sources           []sourceRow
+	Error             string
 }
 
 func (h *handler) dashboard(response http.ResponseWriter, request *http.Request) {
-	if request.URL.Path != "/" {
-		http.NotFound(response, request)
-		return
-	}
-	if request.Method != http.MethodGet {
-		response.Header().Set("Allow", http.MethodGet)
-		http.Error(response, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
-
 	data := dashboardData{
 		Name:              "ROTUP",
-		Version:           h.version,
-		ApplicationStatus: h.source.ApplicationStatus(),
+		Version:           h.deps.Version,
+		ApplicationStatus: h.deps.Status.ApplicationStatus(),
 		DatabaseStatus:    "ok",
 	}
+	if h.deps.Engine != nil {
+		data.Engine = h.deps.Engine()
+	}
+
 	statusCode := http.StatusOK
-	if err := h.source.DatabaseHealth(request.Context()); err != nil {
+	if err := h.deps.Status.DatabaseHealth(request.Context()); err != nil {
 		data.DatabaseStatus = "unavailable"
 		data.Error = "database health check failed"
 		statusCode = http.StatusServiceUnavailable
 	} else {
-		latest, err := h.source.LatestRun(request.Context())
+		latest, err := h.deps.Status.LatestRun(request.Context())
 		if err != nil {
 			data.DatabaseStatus = "unavailable"
 			data.Error = "run history could not be read"
@@ -110,29 +182,29 @@ func (h *handler) dashboard(response http.ResponseWriter, request *http.Request)
 		} else {
 			data.LatestRun = latest
 		}
+		if h.deps.Repo != nil && statusCode == http.StatusOK {
+			rows, err := h.sourceRows(request.Context())
+			if err != nil {
+				data.Error = "sources could not be read"
+			} else {
+				data.Sources = rows
+			}
+		}
 	}
 
-	response.Header().Set("Content-Type", "text/html; charset=utf-8")
-	response.WriteHeader(statusCode)
-	_ = h.page.Execute(response, data)
+	h.render(response, request, statusCode, "dashboard", data)
 }
 
 func (h *handler) health(response http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodGet {
-		response.Header().Set("Allow", http.MethodGet)
-		http.Error(response, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
-
 	result := healthResponse{
 		OverallStatus:     "ok",
 		DatabaseStatus:    "ok",
-		ApplicationStatus: h.source.ApplicationStatus(),
+		ApplicationStatus: h.deps.Status.ApplicationStatus(),
 	}
 	statusCode := http.StatusOK
 	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Second)
 	defer cancel()
-	if err := h.source.DatabaseHealth(ctx); err != nil {
+	if err := h.deps.Status.DatabaseHealth(ctx); err != nil {
 		result.OverallStatus = "degraded"
 		result.DatabaseStatus = "unavailable"
 		statusCode = http.StatusServiceUnavailable

@@ -12,18 +12,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bejusxd/rotup/internal/domain"
 	_ "modernc.org/sqlite"
 )
 
 const timestampFormat = time.RFC3339Nano
 
-// Store owns the single M1 SQLite connection.
+// Store owns the single SQLite connection.
 type Store struct {
 	db        *sql.DB
 	logger    *slog.Logger
 	closeOnce sync.Once
 	closeErr  error
+	// writeMu serializes write transactions. The connection pool is already
+	// limited to one connection; this keeps multi-statement write sequences
+	// from interleaving with each other.
+	writeMu sync.Mutex
 }
 
 // Open opens a SQLite database and applies connection safety settings.
@@ -39,8 +42,8 @@ func Open(ctx context.Context, path string, logger *slog.Logger) (*Store, error)
 	if err != nil {
 		return nil, fmt.Errorf("open SQLite: %w", err)
 	}
-	// M1 uses one serialized connection. This also ensures connection-scoped
-	// pragmas apply to every operation and keeps in-memory tests deterministic.
+	// One serialized connection. This also ensures connection-scoped pragmas
+	// apply to every operation and keeps tests deterministic.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
@@ -94,68 +97,6 @@ func (s *Store) configure(ctx context.Context) error {
 	return nil
 }
 
-// RecordRun stores one complete M1 demo run.
-func (s *Store) RecordRun(ctx context.Context, run domain.Run) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO runs (id, kind, status, summary, requested_at, started_at, finished_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		run.ID,
-		run.Kind,
-		run.Status,
-		run.Summary,
-		run.RequestedAt.UTC().Format(timestampFormat),
-		run.StartedAt.UTC().Format(timestampFormat),
-		run.FinishedAt.UTC().Format(timestampFormat),
-	)
-	if err != nil {
-		return fmt.Errorf("record run %q: %w", run.ID, err)
-	}
-	return nil
-}
-
-// LatestRun returns the most recently finished M1 run, or nil when history is empty.
-func (s *Store) LatestRun(ctx context.Context) (*domain.Run, error) {
-	var run domain.Run
-	var requestedAt, startedAt, finishedAt string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, kind, status, summary, requested_at, started_at, finished_at
-		FROM runs
-		ORDER BY finished_at DESC, id DESC
-		LIMIT 1`).Scan(
-		&run.ID,
-		&run.Kind,
-		&run.Status,
-		&run.Summary,
-		&requestedAt,
-		&startedAt,
-		&finishedAt,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read latest run: %w", err)
-	}
-
-	timestamps := []struct {
-		value  string
-		target *time.Time
-	}{
-		{value: requestedAt, target: &run.RequestedAt},
-		{value: startedAt, target: &run.StartedAt},
-		{value: finishedAt, target: &run.FinishedAt},
-	}
-	for _, timestamp := range timestamps {
-		parsed, parseErr := time.Parse(timestampFormat, timestamp.value)
-		if parseErr != nil {
-			return nil, fmt.Errorf("parse run timestamp %q: %w", timestamp.value, parseErr)
-		}
-		*timestamp.target = parsed
-	}
-
-	return &run, nil
-}
-
 // Health verifies that SQLite can serve a simple query.
 func (s *Store) Health(ctx context.Context) error {
 	var value int
@@ -168,10 +109,100 @@ func (s *Store) Health(ctx context.Context) error {
 	return nil
 }
 
+// ForeignKeyCheck reports rows that violate a foreign key constraint. An empty
+// result means the database is referentially consistent.
+func (s *Store) ForeignKeyCheck(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return nil, fmt.Errorf("foreign key check: %w", err)
+	}
+	defer rows.Close()
+
+	var violations []string
+	for rows.Next() {
+		var table, parent sql.NullString
+		var rowID, constraint sql.NullInt64
+		if err := rows.Scan(&table, &rowID, &parent, &constraint); err != nil {
+			return nil, fmt.Errorf("scan foreign key check: %w", err)
+		}
+		violations = append(violations,
+			fmt.Sprintf("table %s row %d references %s", table.String, rowID.Int64, parent.String))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate foreign key check: %w", err)
+	}
+	return violations, nil
+}
+
+// IntegrityCheck runs SQLite's quick integrity check.
+func (s *Store) IntegrityCheck(ctx context.Context) error {
+	var result string
+	if err := s.db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&result); err != nil {
+		return fmt.Errorf("integrity check: %w", err)
+	}
+	if result != "ok" {
+		return fmt.Errorf("SQLite integrity check reported %q", result)
+	}
+	return nil
+}
+
 // Close releases the SQLite connection. It is safe to call more than once.
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
 		s.closeErr = s.db.Close()
 	})
 	return s.closeErr
+}
+
+// withWriteTx runs fn inside a single short write transaction. No filesystem,
+// network, or subprocess work may happen inside fn.
+func (s *Store) withWriteTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}
+
+// formatTime renders a UTC timestamp for storage.
+func formatTime(value time.Time) string {
+	return value.UTC().Format(timestampFormat)
+}
+
+// nullableTime renders an optional timestamp, storing NULL for the zero value.
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return formatTime(value)
+}
+
+// nullableText stores NULL for an empty string so optional columns stay clean.
+func nullableText(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func parseTime(value sql.NullString) (time.Time, error) {
+	if !value.Valid || value.String == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(timestampFormat, value.String)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse timestamp %q: %w", value.String, err)
+	}
+	return parsed, nil
 }

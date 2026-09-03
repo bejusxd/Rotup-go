@@ -20,10 +20,13 @@ func TestApplicationServesAndShutsDownGracefully(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	root := t.TempDir()
 	cfg := config.Config{
 		HTTPAddr:     "127.0.0.1:0",
-		DatabasePath: filepath.Join(t.TempDir(), "rotup.db"),
+		DatabasePath: filepath.Join(root, "rotup.db"),
 		LogLevel:     slog.LevelInfo,
+		StagingRoot:  filepath.Join(root, "staging"),
+		SecretRoot:   filepath.Join(root, "secrets"),
 	}
 	application, err := New(context.Background(), cfg, logger, "dev")
 	if err != nil {

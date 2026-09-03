@@ -1,0 +1,9 @@
+{{template "layout_top" .}}
+<h1>New source</h1>
+<form method="post" action="/sources">
+  {{template "csrf" .CSRFToken}}
+  {{template "source_fields" .Body}}
+  <button type="submit">Create source</button>
+</form>
+<p><a href="/sources">Back to sources</a></p>
+{{template "layout_bottom" .}}

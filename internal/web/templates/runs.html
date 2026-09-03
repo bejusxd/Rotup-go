@@ -1,0 +1,39 @@
+{{template "layout_top" .}}
+<h1>History</h1>
+{{with .Body}}
+{{if .Runs}}
+<table>
+  <tr><th>Requested</th><th>Kind</th><th>Status</th><th>Duration</th><th>Summary</th></tr>
+  {{range .Runs}}
+  <tr>
+    <td><a href="/runs/{{.ID}}">{{timestamp .RequestedAt}}</a></td>
+    <td>{{.Kind}}</td>
+    <td>{{template "run_status" .}}</td>
+    <td>{{duration .Duration}}</td>
+    <td>{{.Summary}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p class="muted">No runs recorded.</p>
+{{end}}
+
+<h2>Events</h2>
+{{if .Events}}
+<table>
+  <tr><th>Occurred</th><th>Severity</th><th>Type</th><th>Component</th><th>Detail</th></tr>
+  {{range .Events}}
+  <tr>
+    <td>{{timestamp .OccurredAt}}</td>
+    <td>{{.Severity}}</td>
+    <td class="mono">{{.EventType}}</td>
+    <td>{{.Component}}</td>
+    <td class="mono">{{.PayloadJSON}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p class="muted">No events recorded.</p>
+{{end}}
+{{end}}
+{{template "layout_bottom" .}}

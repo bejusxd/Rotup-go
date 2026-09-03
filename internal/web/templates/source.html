@@ -1,0 +1,101 @@
+{{template "layout_top" .}}
+{{with .Body}}
+<h1>{{.Source.Name}}</h1>
+<p class="mono">{{.Source.Host}}/{{.Source.RemotePath}} &rarr; staging/sources/{{.Source.StagingRelativePath}}/current</p>
+<p>
+  Staging state: <span class="{{stagingClass .Source.StagingStatus}}">{{.Source.StagingStatus}}</span>
+  &middot; state version {{.Source.StagingStateVersion}}
+  &middot; last published {{if .Source.LastPublishedAt}}{{timestamp .Source.LastPublishedAt}}{{else}}&mdash;{{end}}
+  {{if .Busy}}&middot; <span class="busy">an operation is running</span>{{end}}
+</p>
+{{if eq .Source.StagingStatus "RECOVERY_REQUIRED"}}
+<p class="banner error">ROTUP cannot prove that this source&rsquo;s current tree is a complete reconciled view, so it is not reported as up to date. Run a collection again: a clean run republishes a proven state.</p>
+{{end}}
+
+<h2>Actions</h2>
+<form class="inline" method="post" action="/sources/{{.Source.ID}}/test">
+  {{template "csrf" $.CSRFToken}}<button type="submit">Test connection</button>
+</form>
+<form class="inline" method="post" action="/sources/{{.Source.ID}}/collect">
+  {{template "csrf" $.CSRFToken}}<button type="submit">Collect now</button>
+</form>
+<a href="/sources/{{.Source.ID}}/staging">Inspect staging</a>
+
+<h2>Credential</h2>
+{{if .HasCredential}}
+<p>A password is stored in the secret provider{{if .Credential.Provider}} ({{.Credential.Provider}}){{end}}. Stored values are never displayed again.</p>
+{{else}}
+<p class="muted">No password is stored for this source.</p>
+{{end}}
+<form method="post" action="/sources/{{.Source.ID}}/credential">
+  {{template "csrf" $.CSRFToken}}
+  <label>{{if .HasCredential}}Replace password{{else}}Set password{{end}}<input type="password" name="password" autocomplete="new-password" required></label>
+  <button type="submit">Save password</button>
+</form>
+{{if .HasCredential}}
+<form method="post" action="/sources/{{.Source.ID}}/credential/clear">
+  {{template "csrf" $.CSRFToken}}<button type="submit">Clear stored password</button>
+</form>
+{{end}}
+
+<h2>Latest collection result</h2>
+{{with .LatestResult}}
+<table>
+  <tr><th>Status</th><td>{{template "run_status" .}}</td></tr>
+  <tr><th>Files scanned at source</th><td>{{.FilesScanned}}</td></tr>
+  <tr><th>Files copied</th><td>{{.FilesCopied}}</td></tr>
+  <tr><th>Bytes copied</th><td>{{bytes .BytesCopied}}</td></tr>
+  <tr><th>Files deleted or archived</th><td>{{.FilesDeletedOrArchived}}</td></tr>
+  <tr><th>Engine checks / errors</th><td>{{.EngineChecks}} / {{.EngineErrors}}</td></tr>
+  <tr><th>Staging state version</th><td>{{if .StagingStateVersion}}{{.StagingStateVersion}}{{else}}not published{{end}}</td></tr>
+  <tr><th>Published</th><td>{{timestamp .PublishedAt}}</td></tr>
+  {{if .Warnings}}<tr><th>Warnings</th><td><ul class="warn-list">{{range .Warnings}}<li>{{.}}</li>{{end}}</ul></td></tr>{{end}}
+</table>
+{{else}}
+<p class="muted">This source has no recorded collection result yet.</p>
+{{end}}
+
+<h2>Revision batches</h2>
+{{if .Batches}}
+<table>
+  <tr><th>Created</th><th>Path</th><th>Items</th><th>Size</th><th>Reconciliation completed</th><th>Run</th></tr>
+  {{range .Batches}}
+  <tr>
+    <td>{{timestamp .CreatedAt}}</td>
+    <td class="mono">{{.RelativePath}}</td>
+    <td>{{.ItemCount}}</td>
+    <td>{{bytes .ByteCount}}</td>
+    <td>{{if .ReconciliationCompleted}}<span class="ok">yes</span>{{else}}<span class="bad">no &mdash; this batch may be incomplete</span>{{end}}</td>
+    <td><a href="/runs/{{.CollectionRunID}}">run</a></td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p class="muted">No revision batches have been created for this source.</p>
+{{end}}
+
+<h2>Recent runs</h2>
+{{if .Runs}}
+<table>
+  <tr><th>Requested</th><th>Kind</th><th>Status</th><th>Summary</th></tr>
+  {{range .Runs}}
+  <tr>
+    <td><a href="/runs/{{.ID}}">{{timestamp .RequestedAt}}</a></td>
+    <td>{{.Kind}}</td>
+    <td>{{template "run_status" .}}</td>
+    <td>{{.Summary}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p class="muted">No runs yet.</p>
+{{end}}
+
+<h2>Settings</h2>
+<form method="post" action="/sources/{{.Source.ID}}">
+  {{template "csrf" $.CSRFToken}}
+  {{template "source_fields" .Form}}
+  <button type="submit">Save settings</button>
+</form>
+{{end}}
+{{template "layout_bottom" .}}

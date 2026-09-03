@@ -15,12 +15,16 @@ func TestMigrations(t *testing.T) {
 	t.Parallel()
 
 	store := openTestStore(t)
+	available, err := readMigrations()
+	if err != nil {
+		t.Fatalf("read embedded migrations: %v", err)
+	}
 	first, err := store.Migrate(context.Background())
 	if err != nil {
 		t.Fatalf("first migration run: %v", err)
 	}
-	if first != 1 {
-		t.Fatalf("first migration count = %d, want 1", first)
+	if first != len(available) {
+		t.Fatalf("first migration count = %d, want %d", first, len(available))
 	}
 	second, err := store.Migrate(context.Background())
 	if err != nil {
@@ -57,11 +61,14 @@ func TestRunPersistenceAndReadback(t *testing.T) {
 	want := domain.Run{
 		ID:          "00000000-0000-4000-8000-000000000001",
 		Kind:        domain.RunKindDemo,
+		TriggerKind: domain.RunTriggerManual,
 		Status:      domain.RunStatusSucceeded,
 		Summary:     "M1 demo run",
+		SummaryJSON: "{}",
 		RequestedAt: now,
 		StartedAt:   now,
 		FinishedAt:  now,
+		UpdatedAt:   now,
 	}
 	if err := store.RecordRun(context.Background(), want); err != nil {
 		t.Fatalf("record run: %v", err)

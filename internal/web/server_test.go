@@ -75,7 +75,7 @@ func TestDashboardShowsLatestFakeRun(t *testing.T) {
 		latestRun: &domain.Run{
 			Kind:       domain.RunKindDemo,
 			Status:     domain.RunStatusSucceeded,
-			Summary:    "M1 fake run — not a backup",
+			Summary:    "M1 fake run - not a backup",
 			FinishedAt: time.Date(2026, time.September, 3, 8, 0, 0, 0, time.UTC),
 		},
 	})
@@ -94,9 +94,11 @@ func TestDashboardShowsLatestFakeRun(t *testing.T) {
 	}
 }
 
+// newTestHandler builds a handler with only the status seam wired, which is the
+// M1 surface. The M2 routes are exercised separately with a full fake backend.
 func newTestHandler(t *testing.T, source StatusSource) http.Handler {
 	t.Helper()
-	handler, err := NewHandler(source, "dev")
+	handler, err := NewHandler(Deps{Version: "dev", Status: source})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
 	}

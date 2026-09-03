@@ -1,0 +1,42 @@
+{{template "layout_top" .}}
+{{with .Body}}
+<h1>{{.Name}}</h1>
+<p>Version: {{.Version}}</p>
+<p>Application status: {{.ApplicationStatus}}</p>
+<p>Database status: {{.DatabaseStatus}}</p>
+<p>Transfer engine:
+  {{if .Engine.Available}}<span class="ok">{{.Engine.Name}} {{.Engine.Version}}</span>
+  {{else}}<span class="bad">unavailable</span>{{end}}
+  {{if .Engine.Detail}}<span class="muted">— {{.Engine.Detail}}</span>{{end}}
+  {{if .Engine.DiscoveredOnPath}}<span class="busy">— discovered on PATH; set ROTUP_RCLONE_PATH for production</span>{{end}}
+</p>
+{{if .Error}}<p class="banner error">Dashboard error: {{.Error}}</p>{{end}}
+
+<h2>Latest run</h2>
+{{with .LatestRun}}
+  <p><strong>{{.Kind}}</strong> — {{template "run_status" .}}</p>
+  <p>{{.Summary}}</p>
+  <p>Finished: {{timestamp .FinishedAt}}</p>
+  <p><a href="/runs/{{.ID}}">Run detail</a></p>
+{{else}}
+  <p>No runs recorded.</p>
+{{end}}
+
+<h2>Sources</h2>
+{{if .Sources}}
+<table>
+  <tr><th>Name</th><th>Staging state</th><th>Version</th><th>Last collection</th></tr>
+  {{range .Sources}}
+  <tr>
+    <td><a href="/sources/{{.Source.ID}}">{{.Source.Name}}</a></td>
+    <td><span class="{{stagingClass .Source.StagingStatus}}">{{.Source.StagingStatus}}</span></td>
+    <td>{{.Source.StagingStateVersion}}</td>
+    <td>{{if .LastRun}}{{template "run_status" .LastRun}} {{timestamp .LastRun.FinishedAt}}{{else}}—{{end}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p>No sources configured. <a href="/sources/new">Add one</a>.</p>
+{{end}}
+{{end}}
+{{template "layout_bottom" .}}

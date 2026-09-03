@@ -1,0 +1,19 @@
+{{define "source_fields"}}
+<label>Name<input type="text" name="name" value="{{.Values.Name}}" required></label>
+<label>SMB host<input type="text" name="host" value="{{.Values.Host}}" required></label>
+<label>Share<input type="text" name="share_name" value="{{.Values.ShareName}}" required></label>
+<label>Subdirectory (optional, relative)<input type="text" name="subdirectory" value="{{.Values.Subdirectory}}"></label>
+<label>Username<input type="text" name="username" value="{{.Values.Username}}"></label>
+<label>Staging destination (relative to the staging root)<input type="text" name="staging_relative_path" value="{{.Values.StagingRelativePath}}" required></label>
+<label>Reconciliation policy
+  <select name="reconciliation_policy">
+    {{$selected := .Values.ReconciliationPolicy}}
+    {{range .Policies}}<option value="{{.}}"{{if eq . $selected}} selected{{end}}>{{.}}</option>{{end}}
+  </select>
+</label>
+<p class="muted">archive_then_sync moves replaced and removed files into a revision batch before the current tree is reconciled. copy_only never removes anything. mirror is defined by the architecture but is not implemented yet and is rejected.</p>
+<label>Include rules (one per line, optional)<textarea name="include_rules">{{.IncludeText}}</textarea></label>
+<label>Exclude rules (one per line, optional)<textarea name="exclude_rules">{{.ExcludeText}}</textarea></label>
+<p class="muted">Exclude rules are applied before include rules. Using any include rule makes rclone exclude everything it does not match.</p>
+<label><input type="checkbox" name="enabled" value="1"{{if .Values.Enabled}} checked{{end}}> Enabled</label>
+{{end}}
