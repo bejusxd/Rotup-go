@@ -20,6 +20,9 @@ const (
 	EnvSecretRoot        = "ROTUP_SECRET_ROOT"
 	EnvRclonePath        = "ROTUP_RCLONE_PATH"
 	EnvCollectionTimeout = "ROTUP_COLLECTION_TIMEOUT"
+	EnvLsblkPath         = "ROTUP_LSBLK_PATH"
+	EnvMountHelperPath   = "ROTUP_MOUNT_HELPER"
+	EnvMediaPollInterval = "ROTUP_MEDIA_POLL_INTERVAL"
 )
 
 // Development defaults. Production deployments are expected to set explicit
@@ -30,6 +33,8 @@ const (
 	DefaultStagingRoot       = "./rotup-staging"
 	DefaultSecretRoot        = "./rotup-secrets"
 	DefaultCollectionTimeout = 2 * time.Hour
+	DefaultLsblkPath         = "/usr/bin/lsblk"
+	DefaultMediaPollInterval = 15 * time.Second
 )
 
 // Config contains the complete daemon configuration.
@@ -53,6 +58,16 @@ type Config struct {
 
 	// CollectionTimeout bounds one collection transfer.
 	CollectionTimeout time.Duration
+
+	// LsblkPath is the explicit path to the block-device listing tool.
+	LsblkPath string
+	// MountHelperPath is the explicit path to the privileged mount helper. An
+	// empty value means removable-media management is unavailable, which the
+	// daemon reports rather than working around.
+	MountHelperPath string
+	// MediaPollInterval is how often ROTUP re-enumerates media so that a
+	// missed hotplug hint cannot lose a disk permanently.
+	MediaPollInterval time.Duration
 }
 
 // Load reads configuration from environment variables and applies defaults.
@@ -68,6 +83,9 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		SecretRoot:        valueOrDefault(lookup, EnvSecretRoot, DefaultSecretRoot),
 		LogLevel:          slog.LevelInfo,
 		CollectionTimeout: DefaultCollectionTimeout,
+		LsblkPath:         valueOrDefault(lookup, EnvLsblkPath, DefaultLsblkPath),
+		MountHelperPath:   strings.TrimSpace(valueOrDefault(lookup, EnvMountHelperPath, "")),
+		MediaPollInterval: DefaultMediaPollInterval,
 	}
 
 	if _, err := net.ResolveTCPAddr("tcp", cfg.HTTPAddr); err != nil {
@@ -92,6 +110,17 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 			return Config{}, fmt.Errorf("%s must be positive", EnvCollectionTimeout)
 		}
 		cfg.CollectionTimeout = duration
+	}
+
+	if raw, ok := lookup(EnvMediaPollInterval); ok && strings.TrimSpace(raw) != "" {
+		duration, err := time.ParseDuration(strings.TrimSpace(raw))
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %w", EnvMediaPollInterval, err)
+		}
+		if duration < time.Second {
+			return Config{}, fmt.Errorf("%s must be at least one second", EnvMediaPollInterval)
+		}
+		cfg.MediaPollInterval = duration
 	}
 
 	if err := resolveStagingAndSecretRoots(&cfg); err != nil {

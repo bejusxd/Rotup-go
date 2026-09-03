@@ -1,0 +1,124 @@
+{{template "layout_top" .}}
+{{with .Body}}
+<h1>Disks</h1>
+
+{{if not .Snapshot.PlatformAvailable}}
+<p class="banner error">{{.Snapshot.PlatformReason}}</p>
+{{end}}
+{{if .Snapshot.EnumerationError}}
+<p class="banner error">The system's block devices could not be read: {{.Snapshot.EnumerationError}}</p>
+{{end}}
+{{if .Refresh}}<p class="banner notice">A media operation is running. This page refreshes automatically.</p>{{end}}
+
+<p class="muted">
+  ROTUP identifies a disk by its filesystem UUID, never by its device node, and
+  keeps a connected disk unmounted whenever it is not being used. Only
+  {{range $index, $fs := supportedFilesystems}}{{if $index}}, {{end}}{{$fs}}{{end}}
+  media can be registered and mounted; anything else is shown but never mounted.
+</p>
+
+<h2>Registered disks</h2>
+{{$any := false}}
+<table>
+  <tr><th>Name</th><th>Filesystem UUID</th><th>Filesystem</th><th>Capacity</th>
+      <th>Device now</th><th>State</th><th>Actions</th></tr>
+  {{range .Snapshot.Views}}{{if .Registered}}{{$any = true}}
+  <tr>
+    <td>{{.Disk.Name}}{{if not .Disk.Enabled}} <span class="muted">(disabled)</span>{{end}}</td>
+    <td class="mono">{{.Disk.FilesystemUUID}}</td>
+    <td>{{.Disk.FilesystemType}}{{if not .Supported}} <span class="bad">unsupported</span>{{end}}</td>
+    <td>{{if .Observed}}{{bytes .Observed.SizeBytes}}{{else}}&mdash;{{end}}</td>
+    <td class="mono">{{if .Observed}}{{.Observed.DevicePath}}{{else}}&mdash;{{end}}</td>
+    <td>
+      <span class="{{diskClass .Status}}">{{.Status}}</span>
+      {{if .ErrorCode}}<br><span class="muted mono">{{.ErrorCode}}</span>{{end}}
+      {{if .MountPoint}}<br><span class="muted mono">{{.MountPoint}}</span>{{end}}
+      {{if .ExternalMounts}}<br><span class="bad">mounted outside ROTUP:</span>
+        <span class="muted mono">{{range .ExternalMounts}}{{.}} {{end}}</span>{{end}}
+      {{if .Busy}}<br><span class="busy">operation running</span>{{end}}
+    </td>
+    <td>
+      {{if eq .Status "AVAILABLE_UNMOUNTED"}}
+      <form class="inline" method="post" action="/disks/{{.Disk.ID}}/mount">
+        {{template "csrf" $.CSRFToken}}<button type="submit">Mount and verify</button>
+      </form>
+      {{end}}
+      {{if eq .Status "READY"}}
+      <form class="inline" method="post" action="/disks/{{.Disk.ID}}/unmount">
+        {{template "csrf" $.CSRFToken}}<button type="submit">Sync and unmount</button>
+      </form>
+      {{end}}
+      {{if eq .Status "ERROR"}}
+      <form class="inline" method="post" action="/disks/{{.Disk.ID}}/unmount">
+        {{template "csrf" $.CSRFToken}}<button type="submit">Attempt sync and unmount</button>
+      </form>
+      {{end}}
+    </td>
+  </tr>
+  <tr>
+    <td colspan="7">
+      <form method="post" action="/disks/{{.Disk.ID}}">
+        {{template "csrf" $.CSRFToken}}
+        <label>Name<input type="text" name="name" value="{{.Disk.Name}}" required></label>
+        <label><input type="checkbox" name="enabled" value="1"{{if .Disk.Enabled}} checked{{end}}> Enabled</label>
+        <button type="submit">Save</button>
+      </form>
+    </td>
+  </tr>
+  {{end}}{{end}}
+</table>
+{{if not $any}}<p class="muted">No disks are registered yet.</p>{{end}}
+
+<h2>Observed media</h2>
+{{$observed := false}}
+<table>
+  <tr><th>Device</th><th>Filesystem UUID</th><th>Filesystem</th><th>Label</th>
+      <th>Capacity</th><th>Transport</th><th>Register</th></tr>
+  {{range .Snapshot.Views}}{{if not .Registered}}{{$observed = true}}
+  <tr>
+    <td class="mono">{{.Observed.DevicePath}}</td>
+    <td class="mono">{{if .Observed.FilesystemUUID}}{{.Observed.FilesystemUUID}}{{else}}<span class="muted">none</span>{{end}}</td>
+    <td>{{.Observed.FilesystemType}}</td>
+    <td>{{if .Observed.Label}}{{.Observed.Label}}{{else}}&mdash;{{end}}</td>
+    <td>{{bytes .Observed.SizeBytes}}</td>
+    <td>{{if .Observed.Transport}}{{.Observed.Transport}}{{else}}&mdash;{{end}}{{if .Observed.Removable}} removable{{end}}</td>
+    <td>
+      {{if .Ambiguous}}
+        <span class="bad">duplicate UUID</span>
+        <div class="muted">More than one connected filesystem claims this UUID. ROTUP will not guess which one it is; disconnect the duplicate first.</div>
+      {{else if not .Observed.Identified}}
+        <span class="muted">no persistent UUID</span>
+      {{else if not .Supported}}
+        <span class="muted">{{.Observed.FilesystemType}} is not a filesystem ROTUP manages</span>
+      {{else}}
+      <form method="post" action="/disks/register">
+        {{template "csrf" $.CSRFToken}}
+        <input type="hidden" name="filesystem_uuid" value="{{.Observed.FilesystemUUID}}">
+        <label>Name for this disk<input type="text" name="name" required></label>
+        <button type="submit">Register</button>
+      </form>
+      {{end}}
+    </td>
+  </tr>
+  {{end}}{{end}}
+</table>
+{{if not $observed}}<p class="muted">No unregistered media is currently observed.</p>{{end}}
+
+<h2>Recent media events</h2>
+{{if .Events}}
+<table>
+  <tr><th>Occurred</th><th>Severity</th><th>Type</th><th>Detail</th></tr>
+  {{range .Events}}
+  <tr>
+    <td>{{timestamp .OccurredAt}}</td>
+    <td>{{.Severity}}</td>
+    <td class="mono">{{.EventType}}</td>
+    <td class="mono">{{.PayloadJSON}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p class="muted">No media events recorded.</p>
+{{end}}
+{{end}}
+{{template "layout_bottom" .}}

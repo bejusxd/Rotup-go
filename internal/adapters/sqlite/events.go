@@ -23,13 +23,14 @@ func (s *Store) AppendEvent(ctx context.Context, event domain.Event) error {
 	}
 	return s.withWriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO events (occurred_at, severity, event_type, component, source_id, run_id, payload_json)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			INSERT INTO events (occurred_at, severity, event_type, component, source_id, disk_id, run_id, payload_json)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			formatTime(event.OccurredAt),
 			event.Severity,
 			event.EventType,
 			event.Component,
 			nullableText(event.SourceID),
+			nullableText(event.DiskID),
 			nullableText(event.RunID),
 			payload,
 		)
@@ -46,7 +47,7 @@ func (s *Store) ListEvents(ctx context.Context, limit int) ([]domain.Event, erro
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, occurred_at, severity, event_type, component, source_id, run_id, payload_json
+		SELECT id, occurred_at, severity, event_type, component, source_id, disk_id, run_id, payload_json
 		FROM events
 		ORDER BY occurred_at DESC, id DESC
 		LIMIT ?`, limit)
@@ -54,18 +55,24 @@ func (s *Store) ListEvents(ctx context.Context, limit int) ([]domain.Event, erro
 		return nil, fmt.Errorf("list events: %w", err)
 	}
 	defer rows.Close()
+	return scanEvents(rows)
+}
 
+func scanEvents(rows *sql.Rows) ([]domain.Event, error) {
 	var result []domain.Event
 	for rows.Next() {
 		var event domain.Event
 		var occurredAt sql.NullString
-		var sourceID, runID sql.NullString
+		var sourceID, diskID, runID sql.NullString
 		if err := rows.Scan(&event.ID, &occurredAt, &event.Severity, &event.EventType,
-			&event.Component, &sourceID, &runID, &event.PayloadJSON); err != nil {
+			&event.Component, &sourceID, &diskID, &runID, &event.PayloadJSON); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 		event.SourceID = sourceID.String
+		event.DiskID = diskID.String
 		event.RunID = runID.String
+
+		var err error
 		if event.OccurredAt, err = parseTime(occurredAt); err != nil {
 			return nil, err
 		}

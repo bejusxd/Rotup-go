@@ -51,6 +51,19 @@ func templateFuncs() template.FuncMap {
 				return "busy"
 			}
 		},
+		"supportedFilesystems": func() []string { return domain.SupportedFilesystems },
+		"diskClass": func(status domain.DiskStatus) string {
+			switch status {
+			case domain.DiskAvailableUnmounted, domain.DiskReady, domain.DiskSafeToRemove:
+				return "ok"
+			case domain.DiskError:
+				return "bad"
+			case domain.DiskDisconnected, domain.DiskDetected:
+				return "muted"
+			default:
+				return "busy"
+			}
+		},
 		"stagingClass": func(status domain.StagingStatus) string {
 			switch status {
 			case domain.StagingStable:

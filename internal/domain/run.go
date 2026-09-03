@@ -133,6 +133,7 @@ type Event struct {
 	EventType   string
 	Component   string
 	SourceID    string
+	DiskID      string
 	RunID       string
 	PayloadJSON string
 }

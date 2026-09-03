@@ -1,12 +1,13 @@
 # ROTUP
 
-ROTUP is at the M2 milestone: the collection vertical slice. An administrator
-can configure an SMB source with a protected credential, run a manual connection
-test, run a manual collection through rclone into the staging layout, and
-inspect the resulting runs, metrics, revision batches, and staged files in the
-local web UI.
+ROTUP is at the M3 milestone. An administrator can configure an SMB source with
+a protected credential, run a manual connection test, run a manual collection
+through rclone into the staging layout, and inspect the resulting runs, metrics,
+revision batches and staged files. They can also see the removable media the
+system currently presents, register a backup disk by its filesystem UUID, and
+mount, verify, flush and unmount it explicitly.
 
-USB media, restic, backups, scheduling, rotation, email, and retention are later
+restic, backup repositories, scheduling, rotation, email and retention are later
 milestones and are deliberately not implemented.
 
 ## Run locally
@@ -27,6 +28,9 @@ The dashboard listens on `http://127.0.0.1:8080` by default.
 | `ROTUP_SECRET_ROOT` | `./rotup-secrets` | Service-owned directory holding secret material |
 | `ROTUP_RCLONE_PATH` | discovered on `PATH` | Explicit path to the rclone executable |
 | `ROTUP_COLLECTION_TIMEOUT` | `2h` | Time limit for one collection transfer |
+| `ROTUP_LSBLK_PATH` | `/usr/bin/lsblk` | Explicit path to the block-device listing tool (Linux) |
+| `ROTUP_MOUNT_HELPER` | unset | Explicit path to the privileged mount helper (Linux) |
+| `ROTUP_MEDIA_POLL_INTERVAL` | `15s` | How often removable media is re-enumerated |
 | `ROTUP_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 
 The staging root and the secret root must not overlap; the daemon refuses to
@@ -47,12 +51,31 @@ ROTUP never downloads or installs rclone.
 - **Sources** (`/sources`) — create and edit sources, set or clear the stored
   password, start a connection test or a collection, and open the staging
   browser. Stored passwords are never displayed again.
+- **Disks** (`/disks`) — observed removable media, explicit registration, and
+  the mount, verify, flush and unmount lifecycle. Unknown media is observe-only.
 - **History** (`/runs`) — every durable run plus the operational event log.
 - **Health** (`/healthz`) — JSON health for the daemon and database.
 
 Manual runs execute in the daemon, not in the HTTP request. Starting one
 redirects to its run page, which refreshes itself until the run finishes;
 closing the browser cannot cancel or corrupt it.
+
+## Removable media
+
+Linux is the production runtime for media management. Block devices are
+enumerated with `lsblk --json`, the mount table is read from
+`/proc/self/mountinfo`, and the three privileged operations run through a
+separate `rotup-mounthelper` binary that accepts no path, no mount option and no
+device node. Only ext4 is supported in v1. A disk's durable identity is its
+filesystem UUID and never a device node, a disk is only marked `READY` after the
+mounted filesystem has been read back and proven to be the registered one, and a
+connected disk that is not being used is kept unmounted.
+
+On other platforms the daemon builds and runs, and the disks page says plainly
+that removable media is managed on Linux only.
+
+See `docs/operations/m3-removable-media.md` for the mechanism rationale,
+installation, and the integration spike.
 
 ## Reconciliation policies
 
@@ -94,7 +117,18 @@ go vet ./...
 go build ./cmd/rotupd
 ```
 
-No SMB server and no rclone binary are needed for the normal test run.
+No SMB server, no rclone binary, no root, no Linux and no removable hardware are
+needed for the normal test run.
+
+### Linux media spike
+
+The Linux mount mechanism is verified against a real kernel by an opt-in spike
+that creates its own filesystem image and loop device:
+
+```sh
+go build -o /tmp/rotup-mounthelper ./cmd/rotup-mounthelper
+sudo ROTUP_LINUX_SPIKE=1 ROTUP_MOUNT_HELPER=/tmp/rotup-mounthelper   go test ./internal/platform/linux/ -run Spike -v
+```
 
 ### rclone safety spike
 

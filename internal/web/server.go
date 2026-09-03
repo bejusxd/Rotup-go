@@ -77,8 +77,13 @@ type Deps struct {
 	Admin   SourceAdmin
 	Runner  Collector
 	Staging StagingBrowser
+	Media   Media
 	Engine  func() EngineStatus
 	Logger  *slog.Logger
+	// Background returns a context bound to the daemon's lifetime rather than
+	// to an HTTP request, so an operation a browser started survives that
+	// browser going away.
+	Background func() context.Context
 }
 
 type handler struct {
@@ -128,6 +133,13 @@ func NewHandler(deps Deps) (http.Handler, error) {
 		mux.HandleFunc("GET /sources/{id}/staging", h.browseStaging)
 		mux.HandleFunc("GET /runs", h.listRuns)
 		mux.HandleFunc("GET /runs/{id}", h.showRun)
+	}
+	if deps.Media != nil {
+		mux.HandleFunc("GET /disks", h.listDisks)
+		mux.HandleFunc("POST /disks/register", h.registerDisk)
+		mux.HandleFunc("POST /disks/{id}", h.updateDisk)
+		mux.HandleFunc("POST /disks/{id}/mount", h.mountDisk)
+		mux.HandleFunc("POST /disks/{id}/unmount", h.unmountDisk)
 	}
 
 	return securityHeaders(mux), nil

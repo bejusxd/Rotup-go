@@ -17,6 +17,7 @@ import (
 	"github.com/bejusxd/rotup/internal/config"
 	"github.com/bejusxd/rotup/internal/domain"
 	"github.com/bejusxd/rotup/internal/platform/process"
+	"github.com/bejusxd/rotup/internal/removable"
 	"github.com/bejusxd/rotup/internal/secrets"
 	"github.com/bejusxd/rotup/internal/staging"
 	"github.com/bejusxd/rotup/internal/web"
@@ -34,10 +35,14 @@ type Application struct {
 	engine  *rclone.Engine
 	work    *collector.Service
 	admin   *collector.Admin
+	media   *removable.Service
 	server  *http.Server
 
-	// workCancel stops background collection work at shutdown.
+	// workCtx bounds background work to the daemon's lifetime rather than to
+	// the HTTP request that started it, and workCancel stops it at shutdown.
+	workCtx    context.Context
 	workCancel context.CancelFunc
+	background sync.WaitGroup
 
 	status      atomic.Value
 	engineState atomic.Value
@@ -96,6 +101,7 @@ func (a *Application) initialize(ctx context.Context, version string) error {
 	a.probeEngine(ctx)
 
 	workCtx, cancel := context.WithCancel(context.Background())
+	a.workCtx = workCtx
 	a.workCancel = cancel
 	a.work = collector.New(workCtx, collector.Options{
 		Store:  a.store,
@@ -104,6 +110,14 @@ func (a *Application) initialize(ctx context.Context, version string) error {
 		Logger: a.logger,
 	})
 	a.admin = collector.NewAdmin(a.store, secretStore, layout, a.logger)
+
+	enumerator, mounts := newMediaPlatform(a.cfg, process.NewRunner(), a.logger)
+	a.media = removable.New(removable.Options{
+		Store:      a.store,
+		Enumerator: enumerator,
+		Mounts:     mounts,
+		Logger:     a.logger,
+	})
 
 	// Recovery runs before the HTTP surface exists, so no new work can race it.
 	report, err := a.work.Recover(ctx)
@@ -116,19 +130,28 @@ func (a *Application) initialize(ctx context.Context, version string) error {
 			"sources_marked_for_recovery", report.RecoveredSources)
 	}
 
+	// Media is reconciled before the HTTP surface exists so that a disk left
+	// connected across a reboot converges without any manual repair, and so no
+	// request can act on a state that has not been re-derived from reality.
+	if err := a.media.Reconcile(ctx); err != nil {
+		a.logger.Warn("removable media could not be reconciled at startup", "error", err)
+	}
+
 	if err := a.recordDemoRun(ctx); err != nil {
 		return err
 	}
 
 	handler, err := web.NewHandler(web.Deps{
-		Version: version,
-		Status:  a,
-		Repo:    a.store,
-		Admin:   a.admin,
-		Runner:  a.work,
-		Staging: layout,
-		Engine:  a.EngineStatus,
-		Logger:  a.logger,
+		Version:    version,
+		Status:     a,
+		Repo:       a.store,
+		Admin:      a.admin,
+		Runner:     a.work,
+		Staging:    layout,
+		Media:      a.media,
+		Engine:     a.EngineStatus,
+		Logger:     a.logger,
+		Background: func() context.Context { return a.workCtx },
 	})
 	if err != nil {
 		return fmt.Errorf("initialize HTTP handlers: %w", err)
@@ -210,7 +233,35 @@ func (a *Application) Run(ctx context.Context) error {
 	return a.serve(ctx, listener)
 }
 
+// reconcileMedia re-enumerates media on a timer. Periodic reconciliation is
+// authoritative rather than an optimisation: hotplug notification is not a
+// durable queue, so a dropped hint must never be able to lose a disk. Adding
+// udev event hints later only shortens the latency, it does not change what is
+// true.
+func (a *Application) reconcileMedia() {
+	defer a.background.Done()
+
+	interval := a.cfg.MediaPollInterval
+	if interval <= 0 {
+		interval = config.DefaultMediaPollInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.workCtx.Done():
+			return
+		case <-ticker.C:
+			if err := a.media.Reconcile(a.workCtx); err != nil {
+				a.logger.Warn("removable media could not be reconciled", "error", err)
+			}
+		}
+	}
+}
+
 func (a *Application) serve(ctx context.Context, listener net.Listener) error {
+	a.background.Add(1)
+	go a.reconcileMedia()
 	a.status.Store("running")
 	a.logger.Info("HTTP server started", "address", listener.Addr().String())
 
@@ -272,6 +323,7 @@ func (a *Application) Close() error {
 		if a.work != nil {
 			a.work.Wait()
 		}
+		a.background.Wait()
 		a.closeErr = a.store.Close()
 		if a.closeErr != nil {
 			a.logger.Error("SQLite close failed", "error", a.closeErr)
