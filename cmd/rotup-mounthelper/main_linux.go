@@ -37,6 +37,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -47,7 +48,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/bejusxd/rotup/internal/domain"
+	"github.com/bejusxd/rotup/internal/platform/linux"
 	"github.com/bejusxd/rotup/internal/platform/media"
+	"github.com/bejusxd/rotup/internal/platform/process"
 )
 
 // mountFlags are fixed. Backup media is data, never something to execute or to
@@ -103,18 +107,42 @@ func main() {
 }
 
 func doMount(mountPoint, fsUUID, fsType string) {
-	normalizedUUID := strings.ToLower(fsUUID)
-	normalizedType := strings.ToLower(fsType)
-
-	// The UUID is resolved by the kernel's own by-uuid symlink farm rather than
-	// by anything the caller supplied. Resolving it here also means a UUID that
-	// has just disappeared fails cleanly instead of mounting stale hardware.
-	device, err := filepath.EvalSymlinks("/dev/disk/by-uuid/" + normalizedUUID)
+	normalizedUUID := domain.NormalizeFilesystemUUID(fsUUID)
+	normalizedType := domain.NormalizeFilesystemType(fsType)
+	ctx := context.Background()
+	runner := process.NewRunner()
+	// These are trusted installation paths, never caller input or PATH lookups.
+	// Reuse the daemon's enumeration rules instead of relying on asynchronous
+	// udev symlinks, which may not exist even when the filesystem is readable.
+	enumerator := linux.NewEnumerator("/usr/bin/lsblk", runner)
+	observed, err := enumerator.ResolveFilesystem(ctx, normalizedUUID)
 	if err != nil {
-		fail("device_not_found", "no connected filesystem currently carries that UUID")
+		code := "identity_resolution_failed"
+		var typed *domain.Error
+		if domain.AsError(err, &typed) {
+			code = typed.Code
+		}
+		fail(code, "filesystem identity could not be resolved: "+err.Error())
 	}
-	if !strings.HasPrefix(device, "/dev/") {
-		fail("device_not_found", "the UUID did not resolve to a device node")
+	device := observed.DevicePath
+	if !strings.HasPrefix(device, "/dev/") || filepath.Clean(device) != device {
+		fail("device_not_found", "the UUID did not resolve to a canonical device node")
+	}
+	// Hold the selected block device open across the mount and probe its actual
+	// signature without a blkid cache, before AND after mounting. Metadata from
+	// lsblk/udev is discovery, not permission to trust a stale signature.
+	fd, err := unix.Open(device, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		fail("device_not_found", "the resolved device could not be opened")
+	}
+	handle := os.NewFile(uintptr(fd), device)
+	defer handle.Close()
+	var selected unix.Stat_t
+	if err := unix.Fstat(fd, &selected); err != nil || selected.Mode&unix.S_IFMT != unix.S_IFBLK {
+		fail("device_not_found", "the resolved path is not a block device")
+	}
+	if err := verifyFilesystem(ctx, runner, handle, normalizedUUID, normalizedType); err != nil {
+		fail("identity_mismatch", err.Error())
 	}
 
 	if err := prepareMountPoint(mountPoint); err != nil {
@@ -129,12 +157,30 @@ func doMount(mountPoint, fsUUID, fsType string) {
 		fail("mount_failed", "the mount call failed: "+errnoText(err))
 	}
 
-	// The helper reports what it can observe after mounting; rotupd does the
-	// comparing. Resolving the by-uuid link again confirms the kernel still
-	// associates that UUID with the device now mounted here.
-	observedUUID := ""
-	if resolved, err := filepath.EvalSymlinks("/dev/disk/by-uuid/" + normalizedUUID); err == nil && resolved == device {
-		observedUUID = normalizedUUID
+	// Correlate the actual mounted filesystem's kernel device number with the
+	// open device, re-probe the signature, and re-check UUID uniqueness. The
+	// daemon still independently verifies mountinfo and fresh enumeration.
+	var mounted unix.Stat_t
+	verificationErr := unix.Stat(mountPoint, &mounted)
+	if verificationErr == nil && mounted.Dev != selected.Rdev {
+		verificationErr = errors.New("the mounted filesystem is not the selected block device")
+	}
+	if verificationErr == nil {
+		verificationErr = verifyFilesystem(ctx, runner, handle, normalizedUUID, normalizedType)
+	}
+	if verificationErr == nil {
+		current, err := enumerator.ResolveFilesystem(ctx, normalizedUUID)
+		verificationErr = err
+		if err == nil && (current.DevicePath != device || current.FilesystemType != normalizedType) {
+			verificationErr = errors.New("the filesystem identity changed while mounting")
+		}
+	}
+	if verificationErr != nil {
+		if err := unix.Unmount(mountPoint, 0); err != nil {
+			fail("identity_mismatch", "mounted identity could not be verified and cleanup unmount failed")
+		}
+		_ = os.Remove(mountPoint)
+		fail("identity_mismatch", "mounted identity could not be verified: "+verificationErr.Error())
 	}
 
 	succeed(media.Result{
@@ -142,7 +188,7 @@ func doMount(mountPoint, fsUUID, fsType string) {
 		Operation:      media.CommandMount,
 		MountPoint:     mountPoint,
 		ResolvedDevice: device,
-		FilesystemUUID: observedUUID,
+		FilesystemUUID: normalizedUUID,
 		FilesystemType: normalizedType,
 		Mounted:        true,
 	})

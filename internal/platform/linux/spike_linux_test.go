@@ -5,7 +5,10 @@ package linux
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,10 +16,14 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
+	"github.com/bejusxd/rotup/internal/adapters/sqlite"
 	"github.com/bejusxd/rotup/internal/domain"
 	"github.com/bejusxd/rotup/internal/platform/media"
 	"github.com/bejusxd/rotup/internal/platform/process"
 	"github.com/bejusxd/rotup/internal/ports"
+	"github.com/bejusxd/rotup/internal/removable"
 )
 
 // This is the M3 Linux mechanism spike. It proves on a real kernel what the
@@ -45,7 +52,7 @@ func requireSpike(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Fatalf("%s is set but the test is not running as root; loop devices and mounts need it", spikeEnv)
 	}
-	for _, tool := range []string{"losetup", "mkfs.ext4", "lsblk"} {
+	for _, tool := range []string{"losetup", "mkfs.ext4", "lsblk", "blkid"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Fatalf("%s is required for the spike and was not found: %v", tool, err)
 		}
@@ -103,10 +110,13 @@ func newLoopImage(t *testing.T, sizeMB int) *loopImage {
 	image := &loopImage{t: t, path: imagePath, device: device}
 	t.Cleanup(image.detach)
 
-	image.uuid = strings.ToLower(run(t, "blkid", "-s", "UUID", "-o", "value", device))
+	image.uuid = strings.ToLower(run(t, "blkid", "--probe", "-s", "UUID", "-o", "value", device))
 	if image.uuid == "" {
 		t.Fatal("the test filesystem reported no UUID")
 	}
+	// Device creation and udev publication are asynchronous on Linux. Wait for
+	// the fixture's known, directly-probed UUID, not for a by-uuid symlink.
+	waitForFilesystem(t, device, image.uuid)
 	return image
 }
 
@@ -119,14 +129,70 @@ func (i *loopImage) detach() {
 	i.device = ""
 }
 
-// reattach detaches and re-attaches the image, which normally hands it a
-// different loop device. This is how the spike proves identity is not tied to
-// a device node.
-func (i *loopImage) reattach() string {
+// reattach allocates the second node while the first is still occupied. The
+// image is unmounted and neither mapping is written through. Only after the
+// second attachment exists is the first released, making the node change
+// deterministic even when the kernel always chooses the lowest free number.
+func (i *loopImage) reattach() *loopImage {
 	i.t.Helper()
-	_ = exec.Command("losetup", "--detach", i.device).Run()
-	i.device = run(i.t, "losetup", "--find", "--show", i.path)
-	return i.device
+	other := &loopImage{t: i.t, path: i.path, uuid: i.uuid,
+		device: run(i.t, "losetup", "--find", "--show", i.path)}
+	i.t.Cleanup(other.detach)
+	if other.device == i.device {
+		i.t.Fatal("the second simultaneous attachment must use a different device node")
+	}
+	run(i.t, "losetup", "--detach", i.device)
+	waitForLoopDetach(i.t, i.device)
+	i.device = ""
+	waitForFilesystem(i.t, other.device, other.uuid)
+	return other
+}
+
+func waitForFilesystem(t *testing.T, device, uuid string) {
+	t.Helper()
+	enumerator := spikeEnumerator(t)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		item, err := enumerator.ResolveFilesystem(context.Background(), uuid)
+		if err == nil && item.DevicePath == device {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("fixture %s with UUID %s was not published: item=%#v error=%v", device, uuid, item, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func loopStatus(t *testing.T, device string) *unix.LoopInfo64 {
+	t.Helper()
+	handle, err := os.Open(device)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("open loop device: %v", err)
+	}
+	defer handle.Close()
+	info, err := unix.IoctlLoopGetStatus64(int(handle.Fd()))
+	if errors.Is(err, unix.ENXIO) {
+		return nil // Kernel confirms that no backing file is attached.
+	}
+	if err != nil {
+		t.Fatalf("read kernel loop status: %v", err)
+	}
+	return info
+}
+
+func waitForLoopDetach(t *testing.T, device string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for loopStatus(t, device) != nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s still has an attached backing file", device)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func spikeEnumerator(t *testing.T) *Enumerator {
@@ -180,13 +246,16 @@ func TestSpikeIdentitySurvivesADeviceNodeChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
 	}
-	firstDevice := findByUUID(before, image.uuid)[0].DevicePath
-
-	// Hold a second loop device so the image is very likely to come back on a
-	// different node, then re-attach.
-	spacer := newLoopImage(t, 16)
-	_ = spacer
-	secondDevice := image.reattach()
+	initial := findByUUID(before, image.uuid)
+	if len(initial) != 1 {
+		t.Fatalf("initial UUID matches = %d, want 1", len(initial))
+	}
+	firstDevice := initial[0].DevicePath
+	image = image.reattach()
+	secondDevice := image.device
+	if firstDevice == secondDevice {
+		t.Fatal("the spike did not exercise a device-node change")
+	}
 
 	after, err := enumerator.Enumerate(context.Background())
 	if err != nil {
@@ -230,6 +299,9 @@ func TestSpikeMountVerifySyncUnmountRoundTrip(t *testing.T) {
 	}
 	if result.MountPoint != expected {
 		t.Fatalf("mount point = %q, want the derived %q", result.MountPoint, expected)
+	}
+	if result.FilesystemUUID != image.uuid || result.FilesystemType != "ext4" || !result.Mounted {
+		t.Fatalf("the helper did not verify the mounted identity: %#v", result)
 	}
 
 	// The mount is only believed after the kernel mount table and the block
@@ -356,8 +428,10 @@ func TestSpikeHelperRefusesUnsafeArguments(t *testing.T) {
 	t.Log("SPIKE: the helper refused every unsafe argument shape")
 }
 
-// G. Detaching the loop device under a live mount must not produce a false
-// success, and the state must converge conservatively.
+// G. Linux defers loop detachment while a mount holds a reference. Exercise
+// actual removal at the final unmount and require the real service (not just
+// a helper exit code) to refuse SAFE_TO_REMOVE. A loop detach request cannot
+// simulate physical USB loss during I/O; portable fault tests cover that path.
 func TestSpikeSurpriseRemovalProducesNoFalseSuccess(t *testing.T) {
 	requireSpike(t)
 	image := newLoopImage(t, 64)
@@ -365,33 +439,60 @@ func TestSpikeSurpriseRemovalProducesNoFalseSuccess(t *testing.T) {
 	enumerator := spikeEnumerator(t)
 	ctx := context.Background()
 
-	diskID, err := domain.NewID()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "spike.db"), logger)
 	if err != nil {
-		t.Fatalf("new id: %v", err)
+		t.Fatal(err)
 	}
-	if _, err := manager.Mount(ctx, ports.MountRequest{
-		DiskID: diskID, FilesystemUUID: image.uuid, FilesystemType: "ext4",
-	}); err != nil {
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := removable.New(removable.Options{Store: store, Enumerator: enumerator, Mounts: manager, Logger: logger})
+	diskID, err := service.Register(ctx, image.uuid, "spike removal")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := service.Mount(ctx, diskID); err != nil {
 		t.Fatalf("mount: %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Unmount(context.Background(), diskID) })
 
-	// Pull the device out from under the mount.
+	point, _ := manager.MountPointFor(diskID)
+	if err := os.WriteFile(filepath.Join(point, "pending-flush"), []byte("M3 removal spike"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A successful detach request sets AUTOCLEAR, not physical disappearance.
 	run(t, "losetup", "--detach", image.device)
 	detached := image.device
-	image.device = ""
+	info := loopStatus(t, detached)
+	if info == nil || info.Flags&unix.LO_FLAGS_AUTOCLEAR == 0 {
+		t.Fatal("the mounted loop should still be attached with deferred AUTOCLEAR removal")
+	}
 
 	observed, err := enumerator.Enumerate(ctx)
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
 	}
-	if len(findByUUID(observed, image.uuid)) != 0 {
-		t.Fatal("a detached device must no longer be observed")
+	if len(findByUUID(observed, image.uuid)) != 1 {
+		t.Fatal("a backing filesystem still held by a live mount must remain observed")
 	}
-	// Whatever the unmount does, the state ROTUP derives must not claim the
-	// disk was safely flushed, because the hardware is gone.
-	unmountErr := manager.Unmount(ctx, diskID)
-	t.Logf("SPIKE: after detaching %s, unmount returned %v", detached, unmountErr)
+	// The final mount reference is released by SyncAndUnmount. The kernel now
+	// really detaches the backing file; the service must not report a safe disk.
+	unmountErr := service.SyncAndUnmount(ctx, diskID)
+	var typed *domain.Error
+	if !domain.AsError(unmountErr, &typed) || typed.Code != domain.DiskErrorRemovedDuringOperation {
+		t.Fatalf("removal must not succeed: got %v, want removed_during_operation", unmountErr)
+	}
+	waitForLoopDetach(t, detached)
+	image.device = ""
+	disk, err := store.Disk(ctx, diskID)
+	if err != nil || disk == nil {
+		t.Fatalf("read disk: %v", err)
+	}
+	if disk.CurrentStatus != domain.DiskDisconnected || disk.LastErrorCode != domain.DiskErrorRemovedDuringOperation {
+		t.Fatalf("removed media must be DISCONNECTED, never SAFE_TO_REMOVE: %#v", disk)
+	}
 
 	observed, err = enumerator.Enumerate(ctx)
 	if err != nil {
@@ -400,6 +501,7 @@ func TestSpikeSurpriseRemovalProducesNoFalseSuccess(t *testing.T) {
 	if len(findByUUID(observed, image.uuid)) != 0 {
 		t.Fatal("the removed filesystem must stay absent")
 	}
+	t.Logf("SPIKE: %s genuinely detached after the last reference closed; service refused safe removal: %v", detached, unmountErr)
 }
 
 // readMountOptions returns the super options recorded for a mount point.

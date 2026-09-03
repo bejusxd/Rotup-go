@@ -11,10 +11,13 @@ recovery runbook; that belongs to the hardening milestone.
 Block devices are enumerated with `lsblk --json --bytes --paths --output ...`
 and parsed as structured JSON. No human-oriented column output is ever parsed.
 
-`lsblk` ships with util-linux on every target distribution, needs no privilege
-for the fields ROTUP reads, and gives the UUID, filesystem type, size, label,
-removable flag and transport in one call. Walking sysfs would reimplement it,
+`lsblk` ships with util-linux on every target distribution and gives the UUID,
+filesystem type, size, label, removable flag and transport in one call. Walking sysfs would reimplement it,
 and a libudev binding would pull cgo into the build for no extra information.
+With a populated udev database this works without privilege. Without that
+database, reading filesystem metadata requires block-device read access,
+normally root. A root-only spike does not prove an unprivileged deployment's
+udev/permission setup.
 
 Mount state is deliberately **not** taken from `lsblk`. It comes from
 `/proc/self/mountinfo`, which is the kernel's own answer and also reveals
@@ -38,13 +41,26 @@ The helper contract is the security boundary:
 | It receives | It derives or fixes itself |
 |---|---|
 | a ROTUP-generated disk identifier | the mount point, `/run/rotup/media/<disk-id>` |
-| a filesystem UUID | the device, via `/dev/disk/by-uuid/<uuid>` |
+| a filesystem UUID | the unique currently observed device, using the daemon's `lsblk` enumerator |
 | a filesystem type from an allowlist | the mount flags, `nodev,nosuid,noexec` |
 
 No path, no mount option, no device node and no shell ever crosses the
 boundary. The helper clears its environment before doing anything, validates
 every argument again on its own account, refuses a mount point that is not an
 empty non-symlink directory, and never uses `MNT_FORCE` or `MNT_DETACH`.
+
+Both sides use the same filesystem observation and UUID-normalization rules;
+neither USB classification nor a `/dev/disk/by-uuid` symlink defines identity.
+Those symlinks are asynchronous udev output, not kernel identity. Empty
+(zero-size) block devices are excluded even if signature metadata is stale.
+The helper independently refuses absent or duplicate UUIDs, holds the selected
+block device open, and uses `blkid --probe` on that descriptor before and after
+mounting. It checks the mounted kernel device number and re-resolves the UUID
+before reporting success. The daemon still independently verifies mountinfo
+and fresh enumeration. Failed verification never reports a successful mount.
+
+The helper uses fixed `/usr/bin/lsblk` and `/usr/sbin/blkid` executables with an
+empty environment; it accepts no executable or device path from its caller.
 
 ### Supported filesystems: ext4 only
 
@@ -122,7 +138,7 @@ privileged code, which is what the helper contract exists to prevent.
 
 ## Required packages
 
-- `util-linux` (`lsblk`, and `losetup` and `blkid` for the spike)
+- `util-linux` (`lsblk` and `blkid`; additionally `losetup` for the spike)
 - `e2fsprogs` (`mkfs.ext4`, for the spike only)
 
 ## Reconciliation
@@ -144,18 +160,46 @@ Requires root, on Linux, and touches nothing but a filesystem image it creates
 in its own temporary directory:
 
 ```sh
-go build -o /tmp/rotup-mounthelper ./cmd/rotup-mounthelper
-sudo ROTUP_LINUX_SPIKE=1 ROTUP_MOUNT_HELPER=/tmp/rotup-mounthelper \
-  go test ./internal/platform/linux/ -run Spike -v
+# From the repository root. Build as the ordinary development user.
+go build -o .cache/m3-spike/rotup-mounthelper ./cmd/rotup-mounthelper
+go test -c -o .cache/m3-spike/linux.test ./internal/platform/linux
+sudo env ROTUP_LINUX_SPIKE=1 \
+  ROTUP_MOUNT_HELPER="$PWD/.cache/m3-spike/rotup-mounthelper" \
+  "$PWD/.cache/m3-spike/linux.test" -test.run Spike -test.v -test.count=1 -test.timeout=3m
 ```
 
 It covers enumeration and UUID discovery, identity surviving a device-node
 change, mount with post-mount identity verification, write/sync/unmount and
 re-mount with the data intact, refusal of an absent identity, refusal of every
-unsafe helper argument shape, and loop detach under a live mount.
+unsafe helper argument shape, and real service state after deferred loop
+detachment. No existing spike is disabled.
+
+Fixture UUIDs are obtained by uncached probing. Fixture setup waits (with a
+deadline) for the asynchronous device metadata to reflect that known UUID.
+For the node-change test, a second attachment is allocated while the first
+node is still occupied; the original is then detached before verification.
+No mounted image is double-attached or written through both mappings.
+
+`losetup -d` under a live mount requests `AUTOCLEAR`; the filesystem remains
+attached until its last reference closes. This is normal Linux behavior, not
+a WSL workaround. The spike checks kernel loop status, then exercises the
+real service's sync/unmount and requires `removed_during_operation` and
+`DISCONNECTED` after actual detachment. The absent UUID assertion remains
+mandatory once the backing file really is detached.
+
+A loop detach cannot model physical USB disappearance during an in-flight
+write on either WSL or native Linux. Portable fault tests retain that coverage;
+a physical-device test is still required to validate the hardware path. Do not
+interpret a green loop spike as M3 completion or as hardware-unplug validation.
 
 Record the distribution, kernel version, util-linux version and filesystems
 exercised alongside the run.
+
+Validation on 2026-09-04: Ubuntu 26.04 LTS under WSL2, kernel
+`6.18.33.2-microsoft-standard-WSL2`, util-linux `2.41.3`, ext4 test images.
+All six spikes passed, including five consecutive repetitions (30 test runs).
+The node-change test observed `/dev/loop1` -> `/dev/loop2`. This does not remove
+the physical-unplug or unprivileged-deployment limitations above.
 
 ## Security notes
 

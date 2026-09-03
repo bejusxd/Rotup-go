@@ -101,9 +101,8 @@ func ValidateDiskID(value string) error {
 }
 
 // ValidateFilesystemUUID accepts the hexadecimal-and-dash forms real
-// filesystems use. The value is only ever used to look up
-// /dev/disk/by-uuid/<value>, so nothing that could traverse or be read as a
-// flag is allowed through.
+// filesystems use. It is an identity to resolve from fresh block-device
+// observations, never a device path or an option for a privileged command.
 func ValidateFilesystemUUID(value string) error {
 	if value == "" || len(value) > 64 {
 		return fmt.Errorf("%w: filesystem uuid has an unacceptable length", ErrInvalidArgument)

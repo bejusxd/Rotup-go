@@ -15,9 +15,10 @@ import (
 // Enumeration uses lsblk's JSON output rather than blkid, sysfs walking, or a
 // libudev binding.
 //
-// lsblk ships with util-linux on every supported distribution, needs no
-// privilege for the fields ROTUP reads, and emits structured JSON, so there is
-// no column-aligned human output to parse. sysfs walking would reimplement what
+// lsblk ships with util-linux on every supported distribution and emits
+// structured JSON. Without a udev database, filesystem metadata requires read
+// access to the block devices (normally root). There is no column-aligned human
+// output to parse. sysfs walking would reimplement what
 // lsblk already does correctly, and a libudev binding would pull cgo into the
 // build for no additional information. Mount state is deliberately not taken
 // from here: it comes from the kernel's own mount table, which is authoritative.
@@ -131,6 +132,33 @@ func (e *Enumerator) Enumerate(ctx context.Context) ([]domain.ObservedMedia, err
 	return media, nil
 }
 
+// ResolveFilesystem uses the same observation set as the daemon. Neither USB
+// classification nor the existence of a udev by-uuid symlink defines identity.
+// Absence and duplicate UUIDs both fail closed; a node is never remembered.
+func (e *Enumerator) ResolveFilesystem(ctx context.Context, uuid string) (domain.ObservedMedia, error) {
+	observed, err := e.Enumerate(ctx)
+	if err != nil {
+		return domain.ObservedMedia{}, err
+	}
+	wanted := domain.NormalizeFilesystemUUID(uuid)
+	var matches []domain.ObservedMedia
+	for _, item := range observed {
+		if wanted != "" && item.FilesystemUUID == wanted {
+			matches = append(matches, item)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return domain.ObservedMedia{}, domain.NewError(domain.ErrClassUnavailable, "device_not_found",
+			"no connected filesystem currently carries that UUID")
+	case 1:
+		return matches[0], nil
+	default:
+		return domain.ObservedMedia{}, domain.NewError(domain.ErrClassIntegrity, "ambiguous_identity",
+			"more than one connected filesystem carries that UUID")
+	}
+}
+
 // flatten walks the device tree and keeps every node that carries a filesystem.
 // Both whole disks and partitions can carry one, so neither is assumed.
 func flatten(device lsblkDevice, parentPath string, observedAt time.Time) []domain.ObservedMedia {
@@ -140,7 +168,9 @@ func flatten(device lsblkDevice, parentPath string, observedAt time.Time) []doma
 	if path == "" && device.Name != "" {
 		path = "/dev/" + strings.TrimPrefix(device.Name, "/dev/")
 	}
-	if device.FSType != "" {
+	// An empty device cannot carry a filesystem, even if udev still has old
+	// signature metadata. This applies to all block devices, not just loops.
+	if device.Size > 0 && domain.NormalizeFilesystemType(device.FSType) != "" {
 		result = append(result, domain.ObservedMedia{
 			DevicePath:     path,
 			FilesystemUUID: domain.NormalizeFilesystemUUID(device.UUID),
