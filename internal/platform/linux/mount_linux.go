@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -171,27 +172,16 @@ func (m *MountManager) Unmount(ctx context.Context, diskID string) error {
 // invoke runs the helper and decodes its result. A helper that exits zero
 // without a decodable OK result is treated as a failure, so an unexpected
 // binary at the configured path cannot be mistaken for a successful mount.
-func (m *MountManager) invoke(ctx context.Context, timeout time.Duration, args ...string) (media.Result, error) {
+func (m *MountManager) invoke(ctx context.Context, timeout time.Duration, command string, args ...string) (media.Result, error) {
 	if !m.Available() {
 		return media.Result{}, domain.NewError(domain.ErrClassConfiguration, "mount_helper_unconfigured",
 			"no mount helper is configured; set ROTUP_MOUNT_HELPER")
 	}
-	// Validating here as well as in the helper means a defect in ROTUP is
-	// caught before it reaches privileged code, not only by it.
-	for i := 0; i+1 < len(args); i += 2 {
-		var err error
-		switch args[i] {
-		case media.FlagDiskID:
-			err = media.ValidateDiskID(args[i+1])
-		case media.FlagFSUUID:
-			err = media.ValidateFilesystemUUID(args[i+1])
-		case media.FlagFSType:
-			err = media.ValidateFilesystemType(args[i+1])
-		}
-		if err != nil {
-			return media.Result{}, domain.WrapError(domain.ErrClassInvariant, "mount_argument_invalid",
-				"a media operation was built with an argument ROTUP will not pass to privileged code", err)
-		}
+	// Keep the subcommand separate from the flag/value pairs: treating it as
+	// a flag shifts every pair and silently bypasses all value validation.
+	if err := validateHelperArguments(command, args); err != nil {
+		return media.Result{}, domain.WrapError(domain.ErrClassInvariant, "mount_argument_invalid",
+			"a media operation was built with an argument ROTUP will not pass to privileged code", err)
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -199,7 +189,7 @@ func (m *MountManager) invoke(ctx context.Context, timeout time.Duration, args .
 
 	process := m.runner.Run(runCtx, ports.CommandSpec{
 		Path:            m.helperPath,
-		Args:            args,
+		Args:            append([]string{command}, args...),
 		Env:             []string{},
 		StdoutTailLimit: 64 * 1024,
 		StderrTailLimit: 64 * 1024,
@@ -236,6 +226,42 @@ func (m *MountManager) invoke(ctx context.Context, timeout time.Duration, args .
 			"the mount helper reported success but exited with a failure status")
 	}
 	return result, nil
+}
+
+// validateHelperArguments accepts only the complete invocation shapes ROTUP
+// constructs. Missing, extra, unknown or duplicate flags fail closed, before
+// any privileged helper process is started.
+func validateHelperArguments(command string, args []string) error {
+	flags := []string{media.FlagDiskID}
+	switch command {
+	case media.CommandMount:
+		flags = append(flags, media.FlagFSUUID, media.FlagFSType)
+	case media.CommandSync, media.CommandUnmount:
+	default:
+		return fmt.Errorf("unknown media operation %q", command)
+	}
+	if len(args) != 2*len(flags) {
+		return fmt.Errorf("invalid argument count for media operation %q", command)
+	}
+	for i, flag := range flags {
+		if args[2*i] != flag {
+			return fmt.Errorf("expected media flag %q", flag)
+		}
+		value := args[2*i+1]
+		var err error
+		switch flag {
+		case media.FlagDiskID:
+			err = media.ValidateDiskID(value)
+		case media.FlagFSUUID:
+			err = media.ValidateFilesystemUUID(value)
+		case media.FlagFSType:
+			err = media.ValidateFilesystemType(value)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func helperErrorCode(code string) string {
