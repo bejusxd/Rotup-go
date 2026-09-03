@@ -467,9 +467,64 @@ func TestInterruptedRunRecordsIncompleteRevisionBatch(t *testing.T) {
 	assertFiles(t, "revisions", h.revisionFiles(run.ID), map[string]string{"a.txt": "OLD"})
 }
 
-// Scenario G: the engine reports per-file errors on an otherwise clean exit.
-// ROTUP must not claim a fully stable successful collection.
-func TestEngineReportedErrorsDowngradeSuccess(t *testing.T) {
+// Scenario G: the engine exits cleanly but its own counters contradict that.
+// Each such signal must block publication outright, not merely add a warning:
+// a tree the engine will not vouch for must never become STABLE, because that
+// is the state a later backup consumes.
+func TestEngineReportedFailureSignalsBlockPublication(t *testing.T) {
+	t.Parallel()
+
+	signals := map[string]func(*fakeEngine){
+		"per-object errors": func(e *fakeEngine) { e.engineErrors = 2 },
+		"fatal error flag":  func(e *fakeEngine) { e.fatalError = true },
+		"retries exhausted": func(e *fakeEngine) { e.retryError = true },
+		"incomplete queue":  func(e *fakeEngine) { e.extraQueuedTransfers = 3 },
+	}
+	for name, arrange := range signals {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t, domain.PolicyArchiveThenSync)
+			h.writeSource("a.txt", "A")
+			if run, _ := h.collect(); !run.Status.Successful() {
+				t.Fatalf("seed run failed: %s", run.SafeError)
+			}
+
+			h.writeSource("a.txt", "NEW")
+			arrange(h.engine)
+			run, source := h.collect()
+
+			if run.Status.Successful() {
+				t.Fatalf("a run the engine will not vouch for must not succeed, got %s", run.Status)
+			}
+			if run.Status != domain.RunStatusFailed {
+				t.Fatalf("run status = %s, want FAILED", run.Status)
+			}
+			if run.ErrorCode != "engine_reported_incomplete" {
+				t.Fatalf("error code = %q, want engine_reported_incomplete", run.ErrorCode)
+			}
+			if source.StagingStatus == domain.StagingStable {
+				t.Fatal("staging must not be advertised as STABLE after an incomplete transfer")
+			}
+			if source.StagingStateVersion != 1 {
+				t.Fatalf("staging state version = %d, want it not advanced past 1", source.StagingStateVersion)
+			}
+
+			result, err := h.store.SourceResult(context.Background(), run.ID, source.ID)
+			if err != nil || result == nil {
+				t.Fatalf("load source result: %v", err)
+			}
+			if result.StagingStateVersion != 0 {
+				t.Fatalf("an incomplete run must not record a published state version, got %d",
+					result.StagingStateVersion)
+			}
+		})
+	}
+}
+
+// The metrics an incomplete run did produce are still recorded, so history
+// explains what happened rather than only that it failed.
+func TestBlockedRunStillRecordsEngineMetrics(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t, domain.PolicyArchiveThenSync)
@@ -477,16 +532,32 @@ func TestEngineReportedErrorsDowngradeSuccess(t *testing.T) {
 	h.engine.engineErrors = 2
 
 	run, _ := h.collect()
-
-	if run.Status != domain.RunStatusSucceededWithWarning {
-		t.Fatalf("run status = %s, want SUCCEEDED_WITH_WARNING", run.Status)
-	}
 	result, err := h.store.SourceResult(context.Background(), run.ID, h.source.ID)
 	if err != nil || result == nil {
 		t.Fatalf("load source result: %v", err)
 	}
 	if result.EngineErrors != 2 {
 		t.Fatalf("engine errors = %d, want 2", result.EngineErrors)
+	}
+	if result.FilesCopied == 0 {
+		t.Fatal("the transfers that did happen must still be recorded")
+	}
+}
+
+// A clean run with only advisory engine warnings still publishes, downgraded.
+func TestAdvisoryWarningsStillPublish(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, domain.PolicyArchiveThenSync)
+	h.writeSource("a.txt", "A")
+	h.engine.warnings = []string{"a file name was adjusted for the destination filesystem"}
+
+	run, source := h.collect()
+	if run.Status != domain.RunStatusSucceededWithWarning {
+		t.Fatalf("run status = %s, want SUCCEEDED_WITH_WARNING", run.Status)
+	}
+	if source.StagingStatus != domain.StagingStable {
+		t.Fatalf("staging status = %s, want STABLE", source.StagingStatus)
 	}
 }
 

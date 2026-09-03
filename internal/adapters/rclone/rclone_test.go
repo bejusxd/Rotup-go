@@ -755,3 +755,137 @@ func TestMinimalEnvironmentCarriesNothingUnexpected(t *testing.T) {
 		}
 	}
 }
+
+func TestCleanExitIsRefusedWhenTheEngineContradictsIt(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"per-object errors": `{"level":"notice","msg":"done","stats":{"transfers":1,"totalTransfers":1,"errors":3}}`,
+		"fatal error flag":  `{"level":"notice","msg":"done","stats":{"transfers":1,"totalTransfers":1,"fatalError":true}}`,
+		"retries exhausted": `{"level":"notice","msg":"done","stats":{"transfers":1,"totalTransfers":1,"retryError":true}}`,
+		"incomplete queue":  `{"level":"notice","msg":"done","stats":{"transfers":2,"totalTransfers":5}}`,
+	}
+	for name, stderr := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &recordingRunner{result: ports.ProcessResult{
+				Started: true, Exited: true, ExitCode: 0, Stderr: []byte(stderr),
+			}}
+			engine := newTestEngine(t, runner, "hunter2")
+
+			result, err := engine.Collect(context.Background(), ports.TransferRequest{
+				Source:         testSpec(),
+				Mode:           ports.TransferCopy,
+				DestinationDir: filepath.Join(t.TempDir(), "current"),
+			})
+			if err == nil {
+				t.Fatal("a zero exit that the engine's own counters contradict must be refused")
+			}
+			var typed *domain.Error
+			if !domain.AsError(err, &typed) || typed.Code != "rclone_reported_incomplete" {
+				t.Fatalf("error = %v, want rclone_reported_incomplete", err)
+			}
+			if typed.Class != domain.ErrClassExternalTool {
+				t.Fatalf("error class = %s, want EXTERNAL_TOOL", typed.Class)
+			}
+			// The statistics still come back so the collector can decide whether
+			// staging was touched.
+			if !result.Stats.Available {
+				t.Fatal("a refused run must still report the statistics it parsed")
+			}
+		})
+	}
+}
+
+func TestCleanExitWithAgreeingCountersSucceeds(t *testing.T) {
+	t.Parallel()
+
+	runner := &recordingRunner{result: ports.ProcessResult{
+		Started: true, Exited: true, ExitCode: 0,
+		Stderr: []byte(`{"level":"notice","msg":"done","stats":{"transfers":4,"totalTransfers":4,"checks":9,"errors":0,"deletes":1}}`),
+	}}
+	engine := newTestEngine(t, runner, "hunter2")
+
+	result, err := engine.Collect(context.Background(), ports.TransferRequest{
+		Source:         testSpec(),
+		Mode:           ports.TransferCopy,
+		DestinationDir: filepath.Join(t.TempDir(), "current"),
+	})
+	if err != nil {
+		t.Fatalf("a clean run whose counters agree must succeed: %v", err)
+	}
+	if result.Stats.FailureSignal() != "" {
+		t.Fatalf("unexpected failure signal: %q", result.Stats.FailureSignal())
+	}
+}
+
+func TestCleanExitWithoutStatisticsIsNotRefused(t *testing.T) {
+	t.Parallel()
+
+	// Missing statistics cannot contradict anything. The exit status is the
+	// engine's own statement that it finished, so the run is not refused here;
+	// the collector records that the counters could not be verified.
+	runner := &recordingRunner{result: ports.ProcessResult{Started: true, Exited: true, ExitCode: 0}}
+	engine := newTestEngine(t, runner, "hunter2")
+
+	result, err := engine.Collect(context.Background(), ports.TransferRequest{
+		Source:         testSpec(),
+		Mode:           ports.TransferCopy,
+		DestinationDir: filepath.Join(t.TempDir(), "current"),
+	})
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if result.Stats.Available {
+		t.Fatal("statistics should not be reported as available")
+	}
+}
+
+func TestFailureSignalPrecedence(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		stats ports.TransferStats
+		want  string
+	}{
+		{"clean", ports.TransferStats{Available: true, Transfers: 3, TotalTransfers: 3}, ""},
+		{"nothing to do", ports.TransferStats{Available: true}, ""},
+		{"checks only", ports.TransferStats{Available: true, Checks: 12}, ""},
+		{"fatal wins", ports.TransferStats{Available: true, FatalError: true, Errors: 2}, "fatal error"},
+		{"retry next", ports.TransferStats{Available: true, RetryError: true, Errors: 2}, "exhausted its retries"},
+		{"errors next", ports.TransferStats{Available: true, Errors: 2}, "2 error(s)"},
+		{"incomplete queue", ports.TransferStats{Available: true, Transfers: 1, TotalTransfers: 4}, "1 of the 4 queued"},
+		{"more done than queued", ports.TransferStats{Available: true, Transfers: 5, TotalTransfers: 4}, ""},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := testCase.stats.FailureSignal()
+			if testCase.want == "" {
+				if got != "" {
+					t.Fatalf("FailureSignal() = %q, want none", got)
+				}
+				return
+			}
+			if !strings.Contains(got, testCase.want) {
+				t.Fatalf("FailureSignal() = %q, want it to mention %q", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestRetryErrorIsCarriedThroughTheParser(t *testing.T) {
+	t.Parallel()
+
+	parsed := parseLogOutput(`{"level":"notice","msg":"done","stats":{"retryError":true,"fatalError":true,"transfers":1,"totalTransfers":2}}`)
+	if !parsed.Stats.RetryError {
+		t.Fatal("retryError must reach the port, not be dropped at the parser")
+	}
+	if !parsed.Stats.FatalError {
+		t.Fatal("fatalError must reach the port")
+	}
+	if parsed.Stats.FailureSignal() == "" {
+		t.Fatal("the parsed statistics must produce a failure signal")
+	}
+}

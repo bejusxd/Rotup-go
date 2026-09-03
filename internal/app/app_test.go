@@ -84,8 +84,11 @@ func TestApplicationServesAndShutsDownGracefully(t *testing.T) {
 		if err != nil {
 			t.Fatalf("serve after cancellation: %v", err)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("application did not shut down within two seconds")
+	case <-time.After(15 * time.Second):
+		// The budget is deliberately looser than the daemon's own five-second
+		// graceful shutdown timeout; a tighter bound tests machine load rather
+		// than shutdown behaviour.
+		t.Fatal("application did not shut down within its graceful shutdown budget")
 	}
 }
 

@@ -358,6 +358,18 @@ func (s *Service) collect(ctx context.Context, run domain.Run, source domain.Sou
 		outcome.Result.BytesScanned = transfer.Stats.TotalBytes
 	}
 
+	// An engine that returned no error but whose own counters say the transfer
+	// did not complete has not produced a publishable tree. The adapter already
+	// refuses this for rclone; repeating the check here keeps the invariant
+	// independent of which engine is wired in, and keeps a future adapter's
+	// oversight from turning into a false STABLE.
+	if transferErr == nil && transfer.Stats.Available {
+		if signal := transfer.Stats.FailureSignal(); signal != "" {
+			transferErr = domain.NewError(domain.ErrClassExternalTool, "engine_reported_incomplete",
+				"the transfer engine reported success but its own counters say the collection did not complete: "+signal)
+		}
+	}
+
 	// The archive directory is inspected regardless of the engine's outcome,
 	// because objects it moved there are exactly the objects no longer in
 	// current and must be recorded before anything else is decided.
@@ -423,13 +435,20 @@ func (s *Service) collect(ctx context.Context, run domain.Run, source domain.Sou
 	outcome.Phase = staging.PhasePublished
 	outcome.Result.StagingStateVersion = state.StateVersion
 	outcome.Result.PublishedAt = published
+	// Reaching here means the engine exited cleanly and every counter it
+	// reported agrees the transfer completed, so the only thing left that can
+	// downgrade the run is advisory: engine warnings about individual objects,
+	// or statistics ROTUP could not read at all.
 	outcome.Status = domain.RunStatusSucceeded
-	if transfer.Stats.Errors > 0 || len(outcome.Warnings) > 0 {
+	if len(outcome.Warnings) > 0 {
 		outcome.Status = domain.RunStatusSucceededWithWarning
 	}
 	if !transfer.Stats.Available {
+		// A clean exit is the engine's own statement that it finished, so this
+		// still publishes. What cannot be verified is the detail behind it, and
+		// the run says so rather than presenting unchecked metrics as fact.
 		outcome.Warnings = append(outcome.Warnings,
-			"the transfer engine produced no machine-readable statistics; the reported metrics are incomplete")
+			"the transfer engine produced no machine-readable statistics, so its completion counters could not be verified and the reported metrics are incomplete")
 		outcome.Status = domain.RunStatusSucceededWithWarning
 	}
 	outcome.Metrics = collectionSummary{

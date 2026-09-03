@@ -46,8 +46,16 @@ type fakeEngine struct {
 	// mutateBeforeFailing performs the transfer and then reports failure, which
 	// is what an interrupted or partially failed run looks like.
 	mutateBeforeFailing bool
-	// engineErrors is reported in the statistics of an otherwise clean run.
-	engineErrors int64
+	// engineErrors, fatalError, retryError and extraQueuedTransfers model the
+	// counters a real engine can report while still exiting cleanly. Each is a
+	// statement that the destination is not a complete transfer.
+	engineErrors         int64
+	fatalError           bool
+	retryError           bool
+	extraQueuedTransfers int64
+
+	// warnings are advisory engine notes that do not imply incompleteness.
+	warnings []string
 
 	collectCalls int
 }
@@ -97,8 +105,11 @@ func (f *fakeEngine) Collect(_ context.Context, request ports.TransferRequest) (
 	}
 	stats.Available = !f.statsUnavailable
 	stats.Errors = f.engineErrors
+	stats.FatalError = f.fatalError
+	stats.RetryError = f.retryError
+	stats.TotalTransfers += f.extraQueuedTransfers
 
-	result := ports.TransferResult{Stats: stats}
+	result := ports.TransferResult{Stats: stats, Warnings: f.warnings}
 	if f.collectErr != nil {
 		return result, f.collectErr
 	}

@@ -418,6 +418,12 @@ func TestSpikeCollectEmitsParsableStatistics(t *testing.T) {
 	if !parsed.Stats.MutationObserved() {
 		t.Fatal("a run that transferred files must report an observed mutation")
 	}
+	// The completion gate must not misfire on a genuinely clean run: real
+	// rclone has to report agreeing counters, or ROTUP would refuse every
+	// successful collection.
+	if signal := parsed.Stats.FailureSignal(); signal != "" {
+		t.Fatalf("a clean run produced a failure signal (%s): %#v", signal, parsed.Stats)
+	}
 
 	// A run that changes nothing must be distinguishable from one that does.
 	second := env.run(ports.TransferSyncWithArchive)
@@ -431,6 +437,38 @@ func TestSpikeCollectEmitsParsableStatistics(t *testing.T) {
 	if idle.Stats.MutationObserved() {
 		t.Fatalf("an idle run must not report a mutation: %#v", idle.Stats)
 	}
+	if signal := idle.Stats.FailureSignal(); signal != "" {
+		t.Fatalf("an idle run produced a failure signal (%s): %#v", signal, idle.Stats)
+	}
+}
+
+// The counters ROTUP refuses a clean exit on must actually be populated by a
+// real failing run, otherwise the gate is decorative.
+func TestSpikeFailedTransferPopulatesTheFailureCounters(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root defeats the permission-based failure this test needs")
+	}
+	env := newSpikeEnvironment(t)
+	env.write(env.source, "a.txt", "A")
+	env.write(env.source, "b.txt", "B")
+	if err := os.Chmod(filepath.Join(env.source, "a.txt"), 0o000); err != nil {
+		t.Skipf("this platform does not support removing read permission: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(env.source, "a.txt"), 0o600) })
+
+	result := env.run(ports.TransferSyncWithArchive)
+	if result.ExitCode == 0 {
+		t.Skip("this platform still allowed the unreadable file to be read")
+	}
+	parsed := parseLogOutput(string(result.Stderr))
+	if !parsed.Stats.Available {
+		t.Fatalf("no statistics for a failed run: %s", result.Stderr)
+	}
+	signal := parsed.Stats.FailureSignal()
+	if signal == "" {
+		t.Fatalf("a failed run produced no failure signal: %#v", parsed.Stats)
+	}
+	t.Logf("SPIKE: failed run signal = %q, stats = %#v", signal, parsed.Stats)
 }
 
 // ROTUP implements rclone's password obfuscation itself so the plaintext never

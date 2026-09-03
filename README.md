@@ -75,6 +75,11 @@ passed. In particular:
 - A source that is unreachable, rejects the credential, or reports no files at
   all while staging still holds data does not run. The last good staged copy is
   never destroyed to match a source that has disappeared.
+- A clean exit status is necessary but not sufficient. If rclone exits zero
+  while its own counters report a fatal error, exhausted retries, per-object
+  errors, or fewer completed transfers than it queued, the run fails: a tree
+  the engine will not vouch for never becomes `STABLE` and never advances the
+  staging state version.
 - A failure that ROTUP cannot prove was harmless leaves the source in
   `RECOVERY_REQUIRED`, and the UI says plainly that the staged view cannot be
   trusted. Running a clean collection again republishes a proven state.

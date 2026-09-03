@@ -5,6 +5,7 @@ package ports
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/bejusxd/rotup/internal/domain"
@@ -136,12 +137,38 @@ type TransferStats struct {
 	Renames        int64
 	Errors         int64
 	FatalError     bool
+	RetryError     bool
 }
 
 // MutationObserved reports whether the engine says it changed the destination.
 // It is only meaningful when Available is true.
 func (s TransferStats) MutationObserved() bool {
 	return s.Transfers > 0 || s.Deletes > 0 || s.Renames > 0
+}
+
+// FailureSignal returns the engine's own reason the run cannot be treated as a
+// complete transfer, or "" when every counter agrees it finished cleanly. It is
+// only meaningful when Available is true.
+//
+// This exists because an exit status is not proof on its own. An engine that
+// exits zero while reporting a fatal error, exhausted retries, per-object
+// errors, or fewer completed transfers than it queued has told ROTUP the
+// destination is incomplete, and ROTUP must believe the counters rather than
+// the exit code. Publishing such a tree as stable would hand a later backup a
+// view the engine itself does not stand behind.
+func (s TransferStats) FailureSignal() string {
+	switch {
+	case s.FatalError:
+		return "the engine reported a fatal error"
+	case s.RetryError:
+		return "the engine exhausted its retries without completing"
+	case s.Errors > 0:
+		return fmt.Sprintf("the engine reported %d error(s) while transferring", s.Errors)
+	case s.Transfers < s.TotalTransfers:
+		return fmt.Sprintf("only %d of the %d queued transfers completed", s.Transfers, s.TotalTransfers)
+	default:
+		return ""
+	}
 }
 
 // TransferResult is returned from Collect even when the transfer failed, so the

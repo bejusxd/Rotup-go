@@ -236,6 +236,17 @@ func (e *Engine) Collect(ctx context.Context, request ports.TransferRequest) (po
 		if failure := classify("the collection", process, stderr); failure != nil {
 			return failure
 		}
+		// A zero exit status is necessary but not sufficient. rclone also
+		// reports its own fatal-error, retry-exhausted, error-count and
+		// queued-versus-completed counters, and any of those contradicting a
+		// clean exit means the destination is not a complete transfer. ROTUP
+		// refuses the run rather than trusting the exit code alone.
+		if parsed.Stats.Available {
+			if signal := parsed.Stats.FailureSignal(); signal != "" {
+				return domain.NewError(domain.ErrClassExternalTool, "rclone_reported_incomplete",
+					"rclone exited successfully but its own counters say the collection did not complete: "+signal)
+			}
+		}
 		return nil
 	})
 	return result, err

@@ -73,6 +73,7 @@ func parseLogOutput(raw string) parsedOutput {
 				Renames:        record.Stats.Renames,
 				Errors:         record.Stats.Errors,
 				FatalError:     record.Stats.FatalError,
+				RetryError:     record.Stats.RetryError,
 			}
 		}
 		switch strings.ToLower(record.Level) {
