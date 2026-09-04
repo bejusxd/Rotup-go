@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import { RequestError } from "../api/client";
 import { useQuery } from "../api/hooks";
@@ -57,10 +58,20 @@ export function RunsPage() {
 }
 export function RunPage() {
   const { id } = useParams();
-  const query = useQuery<RunDetail>(`/runs/${encodeURIComponent(id!)}`, 3000);
+  const [live, setLive] = useState(true);
+  // A finished run never changes again, so stop asking for it.
+  const query = useQuery<RunDetail>(
+    `/runs/${encodeURIComponent(id!)}`,
+    live ? 3000 : 0,
+  );
+  const terminal = query.data?.run.terminal ?? false;
+  useEffect(() => {
+    if (terminal) setLive(false);
+  }, [terminal]);
   if (query.loading) return <LoadingState />;
   if (query.error) return <ErrorAlert error={query.error} />;
   const { run, source, collection, backup } = query.data!;
+  const nextStep = recommendedNextStep(query.data!);
   return (
     <>
       <PageHeader title={label(run.kind)} description={date(run.requestedAt)}>
@@ -96,12 +107,16 @@ export function RunPage() {
       )}
       <section className="panel">
         <h2>Recorded result</h2>
-        <p>
-          {run.summary ||
-            (run.terminal
-              ? "No additional summary was recorded."
-              : "Waiting for the operation result.")}
-        </p>
+        {/* A failure already states itself above; repeating the internal
+            summary verbatim here only reads as a second, rawer error. */}
+        {!run.error && (
+          <p>
+            {run.summary ||
+              (run.terminal
+                ? "No additional summary was recorded."
+                : "Waiting for the operation result.")}
+          </p>
+        )}
         <dl>
           <dt>Source</dt>
           <dd>
@@ -138,18 +153,60 @@ export function RunPage() {
         )}
         {collection && (
           <p>
-            {collection.filesCopied} files copied ·{" "}
-            {collection.filesDeletedOrArchived} displaced/deleted · local copy
-            version {collection.stateVersion}
+            Copied {collection.filesCopied} of {collection.filesScanned} scanned
+            files into the local copy.{" "}
+            {collection.filesDeletedOrArchived > 0
+              ? `${collection.filesDeletedOrArchived} local files that were replaced or removed at the source were archived, not deleted.`
+              : "No local files had to be archived."}
           </p>
         )}
         {collection?.warnings.map((warning, i) => (
           <Alert key={i}>{warning}</Alert>
         ))}
+        {nextStep && (
+          <p>
+            <Link to={nextStep.href}>{nextStep.text} →</Link>
+          </p>
+        )}
       </section>
       <TechnicalDetails>
+        {collection && (
+          <p>
+            Published local copy version {collection.stateVersion} ·{" "}
+            {collection.bytesCopied} of {collection.bytesScanned} bytes copied ·{" "}
+            {collection.engineErrors} engine errors
+          </p>
+        )}
+        <p>
+          Run <code>{run.id}</code> · trigger <code>{run.trigger}</code> ·
+          internal status <code>{run.status}</code>
+        </p>
         <JsonDetails value={query.data} />
       </TechnicalDetails>
     </>
   );
+}
+// Only outcomes whose follow-up is unambiguous get a suggestion. A failure
+// whose cause ROTUP has not established must not be given a confident remedy.
+function recommendedNextStep(detail: RunDetail) {
+  const { run, source } = detail;
+  if (!run.terminal) return null;
+  if (run.kind === "COLLECTION" && run.status === "SUCCEEDED")
+    return { text: "Back this local copy up to a disk", href: "/repositories" };
+  if (run.kind === "CONNECTION_TEST" && run.status === "SUCCEEDED" && source)
+    return {
+      text: "Collect this source",
+      href: `/sources/${source.id}`,
+    };
+  if (
+    run.kind === "CONNECTION_TEST" &&
+    run.status !== "SUCCEEDED" &&
+    source &&
+    run.error?.class === "AUTHENTICATION"
+  )
+    return {
+      text: "Check the username and saved password",
+      href: `/sources/${source.id}`,
+    };
+  return null;
 }

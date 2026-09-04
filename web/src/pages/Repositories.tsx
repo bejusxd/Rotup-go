@@ -183,7 +183,7 @@ export function RepositoryPage() {
                   {source.name}
                   <small className="block">
                     {eligible
-                      ? `Local copy version ${source.stateVersion} · ${date(source.lastPublishedAt)}`
+                      ? `Local copy collected ${date(source.lastPublishedAt)}`
                       : reason}
                   </small>
                 </span>
@@ -256,9 +256,19 @@ export function RepositoryPage() {
         <p className="small muted">
           Latest {historyLimit} backup runs for this storage.
         </p>
-        <RunList runs={history.map((row) => row.run)} />
+        <RunList
+          runs={history.map((row) => row.run)}
+          emptyTitle="No backup has run against this storage"
+          emptyBody="Backups you start here will be recorded with their captured local copies and durability result."
+        />
       </section>
       <TechnicalDetails>
+        <p>
+          Repository <code>{r.id}</code> · restic identity{" "}
+          <code>{r.resticId || "not recorded"}</code> · path{" "}
+          <code>{r.relativePath}</code> on filesystem{" "}
+          <code>{r.filesystemUuid}</code>
+        </p>
         <JsonDetails value={r} />
       </TechnicalDetails>
     </>

@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { mutate } from "../api/client";
 import { useQuery } from "../api/hooks";
-import type { Source, SourceDetail, SourceInput } from "../api/types";
+import type { Run, Source, SourceDetail, SourceInput } from "../api/types";
 import {
   ActionButton,
   Alert,
@@ -200,9 +200,8 @@ export function SourcePage() {
               "Not in recent history"
             )}
           </dd>
-          <dt>Local copy version</dt>
-          <dd>{source.stateVersion}</dd>
         </dl>
+        <p className="muted">{sourceNextStep(source, test, collection)}</p>
       </section>
       <CredentialForm key={source.id} source={source} onSaved={query.reload} />
       <section className="panel">
@@ -213,6 +212,11 @@ export function SourcePage() {
         <RunList runs={runs} sources={{ [source.id]: source.name }} />
       </section>
       <TechnicalDetails>
+        <p>
+          Staging state version <code>{source.stateVersion}</code> · staging
+          path <code>{source.stagingRelativePath}</code> · policy{" "}
+          <code>{source.policy}</code>
+        </p>
         <JsonDetails value={{ source, revisionBatches }} />
         <p>The JSON above contains no saved password or credential locator.</p>
         <a href={`/legacy/sources/${source.id}/staging`}>
@@ -221,6 +225,24 @@ export function SourcePage() {
       </TechnicalDetails>
     </>
   );
+}
+
+// Derived from what the backend already recorded; it suggests, and never
+// implies that ROTUP has verified anything it has not.
+function sourceNextStep(source: Source, test?: Run, collection?: Run) {
+  if (!source.enabled)
+    return "This source is disabled. Enable it in settings before collecting.";
+  if (!source.hasCredential)
+    return "Save the share password below, then test the connection.";
+  if (source.status === "RECOVERY_REQUIRED")
+    return "Review the last collection result before collecting again.";
+  if (!test || test.status !== "SUCCEEDED")
+    return "Test the connection to confirm ROTUP can read this share.";
+  if (!source.lastPublishedAt)
+    return "Collect this source to create its first local copy.";
+  if (collection && collection.status !== "SUCCEEDED")
+    return "The last collection attempt did not succeed. Review it, then collect again.";
+  return "A local copy is published. Back it up to a registered disk from Backup storage.";
 }
 
 export function SourceEditPage() {
@@ -289,7 +311,13 @@ export function SourceForm({ initial }: { initial?: Source }) {
     try {
       const result = await mutate<{ id: string }>(
         initial ? `/sources/${initial.id}` : "/sources",
-        value,
+        // Editing a rules box down to nothing leaves one empty line behind;
+        // an empty rule is not a rule and must not reach the collector.
+        {
+          ...value,
+          includeRules: value.includeRules.filter((r) => r.trim()),
+          excludeRules: value.excludeRules.filter((r) => r.trim()),
+        },
         initial ? "PUT" : "POST",
       );
       navigate(`/sources/${result.id}`);

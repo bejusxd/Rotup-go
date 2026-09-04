@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CredentialForm, SourceForm } from "./Sources";
+import { CredentialForm, SourceForm, SourcePage } from "./Sources";
 import { DisksPage } from "./Disks";
 import { RunPage } from "./Runs";
 import { RepositoryPage, RepositorySetupPage } from "./Repositories";
@@ -355,5 +355,73 @@ describe("setup guidance", () => {
     expect(
       screen.queryByRole("link", { name: /Continue setup/ }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("operator language and audit separation", () => {
+  it("drops empty rule lines instead of sending them to the collector", async () => {
+    vi.mocked(mutate).mockResolvedValue({ id: "source-1" });
+    render(
+      <MemoryRouter>
+        <SourceForm />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Photos" },
+    });
+    fireEvent.change(screen.getByLabelText("Server / host"), {
+      target: { value: "nas" },
+    });
+    fireEvent.change(screen.getByLabelText("Share"), {
+      target: { value: "photos" },
+    });
+    fireEvent.change(screen.getByLabelText(/Exclude rules/), {
+      target: { value: ["*.tmp", "", "  ", "*.part"].join("\n") },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save source" }));
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(mutate).mock.calls[0][1]).toMatchObject({
+      excludeRules: ["*.tmp", "*.part"],
+      includeRules: [],
+    });
+  });
+  it("keeps the state version out of the normal source view but not out of the record", () => {
+    vi.mocked(useQuery).mockReturnValue({
+      loading: false,
+      path: "/sources/source-1",
+      refreshing: false,
+      reload: vi.fn(),
+      data: {
+        source: {
+          id: "source-1",
+          name: "Photos",
+          host: "nas",
+          shareName: "photos",
+          enabled: true,
+          status: "STABLE",
+          stateVersion: 7,
+          stagingRelativePath: "photos",
+          policy: "archive_then_sync",
+          hasCredential: true,
+          busy: false,
+          lastPublishedAt: "2026-09-04T10:00:00Z",
+          lastCollectionRunId: "run-1",
+        },
+        runs: [],
+        revisionBatches: [],
+        historyLimit: 100,
+      },
+    });
+    render(
+      <MemoryRouter>
+        <SourcePage />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText("Local copy version")).not.toBeInTheDocument();
+    // The exact recorded version an audit needs is still on the page.
+    expect(screen.getByText("7")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Test the connection to confirm/),
+    ).toBeInTheDocument();
   });
 });
