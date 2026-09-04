@@ -28,7 +28,7 @@ export function RepositoriesPage() {
     <>
       <PageHeader
         title="Backup storage"
-        description="Each rotated disk has its own encrypted restic repository."
+        description="Each backup disk holds its own encrypted storage, with its own password."
       >
         <Link className="button" to="/repositories/new">
           Prepare a disk
@@ -228,10 +228,10 @@ export function RepositoryPage() {
       <section className="panel">
         <h2>Verification and recovery</h2>
         <p>
-          Use this explicit operation when storage is suspect or a run was
-          interrupted. It checks the repository and resolves recorded
-          interrupted backups. It does not automatically unlock restic or prune
-          data.
+          Use this explicit operation when storage needs checking or a backup
+          was interrupted. It inspects the stored backups and resolves a
+          recorded interrupted backup. It never deletes stored data, and it
+          never clears a lock left behind by another process on its own.
         </p>
         <ConfirmDialog
           title="Verify this backup storage?"

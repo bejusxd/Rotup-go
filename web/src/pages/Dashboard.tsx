@@ -145,9 +145,30 @@ export function DashboardPage() {
       </section>
       {(!system.transferEngine.available || !system.backupEngine.available) && (
         <Alert tone="danger">
-          One or more backup tools are unavailable. Collections need rclone;
-          disk backups need restic. Check the tool configuration before starting
-          an operation.
+          <strong>A required tool is unavailable.</strong>
+          <p>
+            {!system.transferEngine.available &&
+              "Collecting a source needs the transfer tool. "}
+            {!system.backupEngine.available &&
+              "Backing up to a disk needs the snapshot tool. "}
+            Check the tool configuration before starting an operation.
+          </p>
+          <TechnicalDetails>
+            <p>
+              {system.transferEngine.name}:{" "}
+              {system.transferEngine.available
+                ? `available ${system.transferEngine.version}`
+                : system.transferEngine.detail ||
+                  "unavailable, no detail recorded"}
+            </p>
+            <p>
+              {system.backupEngine.name}:{" "}
+              {system.backupEngine.available
+                ? `available ${system.backupEngine.version}`
+                : system.backupEngine.detail ||
+                  "unavailable, no detail recorded"}
+            </p>
+          </TechnicalDetails>
         </Alert>
       )}
       {data.storage.enumerationError && (

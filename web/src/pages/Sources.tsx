@@ -138,8 +138,8 @@ export function SourcePage() {
           }}
         >
           <p>
-            This updates the local staging copy using the saved policy. It does
-            not create a backup on a USB disk.
+            This updates the local copy on this machine using the saved policy.
+            It does not write anything to a backup disk.
           </p>
           <p>
             ROTUP will check the source and staging safety conditions before it

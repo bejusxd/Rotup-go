@@ -146,8 +146,12 @@ describe("backend-owned storage safety", () => {
         <SystemContext.Provider
           value={
             {
-              transferEngine: { available: true },
-              backupEngine: { available: false },
+              transferEngine: { name: "rclone", available: true },
+              backupEngine: {
+                name: "restic",
+                available: false,
+                detail: "not found on the configured path",
+              },
             } as System
           }
         >
@@ -156,8 +160,10 @@ describe("backend-owned storage safety", () => {
       </MemoryRouter>,
     );
     expect(screen.getByText("Some items need attention")).toBeVisible();
+    expect(screen.getByText("A required tool is unavailable.")).toBeVisible();
+    // The operator is told which capability is lost, not which binary.
     expect(
-      screen.getByText(/One or more backup tools are unavailable/),
+      screen.getByText(/Backing up to a disk needs the snapshot tool/),
     ).toBeVisible();
     expect(screen.getByText("Not yet completed")).toBeVisible();
   });
