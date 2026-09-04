@@ -83,6 +83,7 @@ type EngineStatus struct {
 
 // Deps are everything the HTTP layer needs.
 type Deps struct {
+	DevMode    bool
 	Version    string
 	Status     StatusSource
 	Repo       Repository
@@ -135,6 +136,7 @@ func NewHandler(deps Deps) (http.Handler, error) {
 	}
 
 	mux := http.NewServeMux()
+	h.apiRoutes(mux)
 	mux.HandleFunc("GET /healthz", h.health)
 	mux.HandleFunc("GET /{$}", h.dashboard)
 

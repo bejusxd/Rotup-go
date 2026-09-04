@@ -42,6 +42,10 @@ func (g *csrfGuard) token(response http.ResponseWriter, request *http.Request) s
 // check validates a mutating request. It returns a safe message when the
 // request must be refused.
 func (g *csrfGuard) check(request *http.Request) string {
+	return g.checkToken(request, request.PostFormValue(csrfFieldName))
+}
+
+func (g *csrfGuard) checkToken(request *http.Request, submitted string) string {
 	if origin := request.Header.Get("Origin"); origin != "" && origin != "null" {
 		parsed, err := url.Parse(origin)
 		if err != nil || !strings.EqualFold(parsed.Host, request.Host) {
@@ -52,7 +56,6 @@ func (g *csrfGuard) check(request *http.Request) string {
 	if err != nil || !validToken(cookie.Value) {
 		return "this page has no valid form token; reload the page and try again"
 	}
-	submitted := request.PostFormValue(csrfFieldName)
 	if subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(submitted)) != 1 {
 		return "the form token did not match; reload the page and try again"
 	}

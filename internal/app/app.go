@@ -188,6 +188,7 @@ func (a *Application) initialize(ctx context.Context, version string) error {
 	}
 
 	handler, err := web.NewHandler(web.Deps{
+		DevMode:      a.cfg.DevMode,
 		Version:      version,
 		Status:       a,
 		Repo:         a.store,

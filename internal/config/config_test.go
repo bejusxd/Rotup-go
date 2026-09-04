@@ -27,6 +27,25 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.BackupTimeout != DefaultBackupTimeout {
 		t.Fatalf("backup timeout = %v, want %v", cfg.BackupTimeout, DefaultBackupTimeout)
 	}
+	if cfg.DevMode {
+		t.Fatal("development mode must be disabled by default")
+	}
+}
+
+func TestDevelopmentModeIsExplicit(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"true", "false", "invalid", ""} {
+		cfg, err := load(func(key string) (string, bool) { return value, key == EnvDevMode })
+		if value == "invalid" || value == "" {
+			if err == nil {
+				t.Fatalf("accepted %q", value)
+			}
+			continue
+		}
+		if err != nil || cfg.DevMode != (value == "true") {
+			t.Fatalf("dev mode %q: %v, %v", value, cfg.DevMode, err)
+		}
+	}
 }
 
 func TestResticConfiguration(t *testing.T) {

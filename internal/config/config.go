@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -14,6 +15,7 @@ import (
 // Environment variables that configure the daemon.
 const (
 	EnvHTTPAddr          = "ROTUP_HTTP_ADDR"
+	EnvDevMode           = "ROTUP_DEV_MODE"
 	EnvDBPath            = "ROTUP_DB_PATH"
 	EnvLogLevel          = "ROTUP_LOG_LEVEL"
 	EnvStagingRoot       = "ROTUP_STAGING_ROOT"
@@ -42,6 +44,8 @@ const (
 
 // Config contains the complete daemon configuration.
 type Config struct {
+	// DevMode changes HTTP diagnostics/presentation only, never service policy.
+	DevMode      bool
 	HTTPAddr     string
 	DatabasePath string
 	LogLevel     slog.Level
@@ -99,6 +103,13 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		LsblkPath:         valueOrDefault(lookup, EnvLsblkPath, DefaultLsblkPath),
 		MountHelperPath:   strings.TrimSpace(valueOrDefault(lookup, EnvMountHelperPath, "")),
 		MediaPollInterval: DefaultMediaPollInterval,
+	}
+	if raw, ok := lookup(EnvDevMode); ok {
+		dev, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return Config{}, fmt.Errorf("%s must be a boolean", EnvDevMode)
+		}
+		cfg.DevMode = dev
 	}
 
 	if _, err := net.ResolveTCPAddr("tcp", cfg.HTTPAddr); err != nil {
