@@ -185,6 +185,50 @@ export interface Dashboard {
   recentRunLimit: number;
   lastSuccessfulBackupAt: Timestamp;
 }
+// Onboarding state is derived by the daemon from persisted state. The browser
+// renders it and never recomputes it: a configured source is not a reachable
+// one, and a snapshot identifier is not a completed backup.
+export type SetupStepId =
+  | "SOURCE_CONFIGURED"
+  | "SOURCE_CREDENTIAL_SAVED"
+  | "SOURCE_CONNECTION_TESTED"
+  | "FIRST_COLLECTION_COMPLETED"
+  | "BACKUP_DISK_REGISTERED"
+  | "BACKUP_STORAGE_PREPARED"
+  | "BACKUP_DISK_CONNECTED"
+  | "FIRST_BACKUP_COMPLETED";
+export interface SetupStep {
+  id: SetupStepId;
+  title: string;
+  done: boolean;
+  evidence: string;
+  action: string;
+  href: string;
+  blocked: boolean;
+}
+export interface SetupIssue {
+  id: string;
+  title: string;
+  status: string;
+  detail: string;
+  remedy: string;
+  critical: boolean;
+}
+export interface SetupSystem {
+  ready: boolean;
+  checked: boolean;
+  issues: SetupIssue[];
+  command: string;
+  mediaAvailable: boolean;
+}
+export interface SetupState {
+  system: SetupSystem;
+  steps: SetupStep[];
+  complete: boolean;
+  nextStep: SetupStep | null;
+  generatedAt: string;
+  recentRunLimit: number;
+}
 export interface DebugStatus {
   platform: string;
   transferEngine: Engine;

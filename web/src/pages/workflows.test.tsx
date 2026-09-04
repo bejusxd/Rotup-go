@@ -3,6 +3,7 @@ import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CredentialForm, SourceForm, SourcePage } from "./Sources";
 import { DisksPage } from "./Disks";
+import { SetupPage } from "./Setup";
 import { RunPage } from "./Runs";
 import { RepositoryPage, RepositorySetupPage } from "./Repositories";
 import { DebugPage } from "./Debug";
@@ -125,22 +126,41 @@ describe("backup success presentation", () => {
 
 describe("backend-owned storage safety", () => {
   it("surfaces missing backup tools without claiming a completed backup", () => {
-    vi.mocked(useQuery).mockReturnValue({
+    vi.mocked(useQuery).mockImplementation((path) => ({
       loading: false,
-      path: "",
+      path,
       refreshing: false,
       reload: vi.fn(),
-      data: {
-        applicationStatus: "running",
-        databaseStatus: "ok",
-        sources: [],
-        repositories: [],
-        recentRuns: [],
-        recentRunLimit: 100,
-        lastSuccessfulBackupAt: null,
-        storage: { disks: [], enumerationError: "", platformAvailable: true },
-      },
-    });
+      data:
+        path === "/setup"
+          ? {
+              system: {
+                ready: true,
+                checked: true,
+                issues: [],
+                command: "",
+                mediaAvailable: true,
+              },
+              steps: [],
+              complete: false,
+              nextStep: null,
+              recentRunLimit: 100,
+            }
+          : {
+              applicationStatus: "running",
+              databaseStatus: "ok",
+              sources: [],
+              repositories: [],
+              recentRuns: [],
+              recentRunLimit: 100,
+              lastSuccessfulBackupAt: null,
+              storage: {
+                disks: [],
+                enumerationError: "",
+                platformAvailable: true,
+              },
+            },
+    }));
     render(
       <MemoryRouter>
         <SystemContext.Provider
@@ -353,37 +373,77 @@ describe("disk registration guidance", () => {
 });
 
 describe("setup guidance", () => {
-  it("names the next action and points it at the page that performs it", () => {
-    vi.mocked(useQuery).mockReturnValue({
+  it("renders the next action the backend derived, and does not derive its own", () => {
+    const nextStep = {
+      id: "SOURCE_CONNECTION_TESTED",
+      title: "Connection tested successfully",
+      done: false,
+      evidence: "There is no record of a successful connection test.",
+      action: "Test the connection",
+      href: "/sources/source-1",
+      blocked: false,
+    };
+    vi.mocked(useQuery).mockImplementation((path) => ({
       loading: false,
-      path: "/dashboard",
+      path,
       refreshing: false,
       reload: vi.fn(),
-      data: {
-        applicationStatus: "running",
-        databaseStatus: "ok",
-        sources: [
-          { id: "source-1", name: "Photos", enabled: true, status: "STABLE" },
-        ],
-        repositories: [],
-        recentRuns: [],
-        recentRunLimit: 100,
-        lastSuccessfulBackupAt: null,
-        storage: {
-          disks: [],
-          enumerationError: "",
-          platformAvailable: true,
-          platformReason: "",
-        },
-      },
-    });
+      data:
+        path === "/setup"
+          ? {
+              system: {
+                ready: true,
+                checked: true,
+                issues: [],
+                command: "sudo rotupd setup",
+                mediaAvailable: true,
+              },
+              steps: [
+                {
+                  id: "SOURCE_CONFIGURED",
+                  title: "Source configured",
+                  done: true,
+                  evidence: "1 source configured: Photos.",
+                  action: "Add a source",
+                  href: "/sources/source-1",
+                  blocked: false,
+                },
+                nextStep,
+              ],
+              complete: false,
+              nextStep,
+              recentRunLimit: 100,
+            }
+          : {
+              applicationStatus: "running",
+              databaseStatus: "ok",
+              sources: [
+                {
+                  id: "source-1",
+                  name: "Photos",
+                  enabled: true,
+                  status: "STABLE",
+                },
+              ],
+              repositories: [],
+              recentRuns: [],
+              recentRunLimit: 100,
+              lastSuccessfulBackupAt: null,
+              storage: {
+                disks: [],
+                enumerationError: "",
+                platformAvailable: true,
+                platformReason: "",
+              },
+            },
+    }));
     render(
       <MemoryRouter>
         <SystemContext.Provider
           value={
             {
-              transferEngine: { available: true },
-              backupEngine: { available: true },
+              transferEngine: { name: "rclone", available: true },
+              backupEngine: { name: "restic", available: true },
             } as System
           }
         >
@@ -391,16 +451,73 @@ describe("setup guidance", () => {
         </SystemContext.Provider>
       </MemoryRouter>,
     );
-    // The source exists but has never been tested, so that is the next step
-    // and it belongs on that source's own page, not on a list.
-    const next = screen.getAllByRole("link", { name: /Test the connection/ });
-    expect(next.length).toBeGreaterThan(0);
-    next.forEach((link) =>
+    // The action and its destination both come from the API. The dashboard
+    // used to compute this itself, which let two places disagree.
+    const links = screen.getAllByRole("link", { name: /Test the connection/ });
+    expect(links.length).toBeGreaterThan(0);
+    links.forEach((link) =>
       expect(link).toHaveAttribute("href", "/sources/source-1"),
     );
     expect(
       screen.queryByRole("link", { name: /Continue setup/ }),
     ).not.toBeInTheDocument();
+  });
+
+  it("leads with an unprovisioned host before anything else on the dashboard", () => {
+    vi.mocked(useQuery).mockImplementation((path) => ({
+      loading: false,
+      path,
+      refreshing: false,
+      reload: vi.fn(),
+      data:
+        path === "/setup"
+          ? {
+              system: {
+                ready: false,
+                checked: true,
+                issues: [],
+                command: "sudo rotupd setup",
+                mediaAvailable: false,
+              },
+              steps: [],
+              complete: false,
+              nextStep: null,
+              recentRunLimit: 100,
+            }
+          : {
+              applicationStatus: "running",
+              databaseStatus: "ok",
+              sources: [],
+              repositories: [],
+              recentRuns: [],
+              recentRunLimit: 100,
+              lastSuccessfulBackupAt: null,
+              storage: {
+                disks: [],
+                enumerationError: "",
+                platformAvailable: true,
+                platformReason: "",
+              },
+            },
+    }));
+    render(
+      <MemoryRouter>
+        <SystemContext.Provider
+          value={
+            {
+              transferEngine: { name: "rclone", available: true },
+              backupEngine: { name: "restic", available: true },
+            } as System
+          }
+        >
+          <DashboardPage />
+        </SystemContext.Provider>
+      </MemoryRouter>,
+    );
+    expect(
+      screen.getByText("This host is not fully provisioned."),
+    ).toBeVisible();
+    expect(screen.getByText("sudo rotupd setup")).toBeVisible();
   });
 });
 
@@ -469,5 +586,149 @@ describe("operator language and audit separation", () => {
     expect(
       screen.getByText(/Test the connection to confirm/),
     ).toBeInTheDocument();
+  });
+});
+
+describe("first-run onboarding", () => {
+  const baseState = {
+    system: {
+      ready: true,
+      checked: true,
+      issues: [],
+      command: "sudo rotupd setup",
+      mediaAvailable: true,
+    },
+    steps: [
+      {
+        id: "SOURCE_CONFIGURED",
+        title: "Source configured",
+        done: true,
+        evidence: "1 source configured: Photos.",
+        action: "Add a source",
+        href: "/sources/source-1",
+        blocked: false,
+      },
+      {
+        id: "SOURCE_CONNECTION_TESTED",
+        title: "Connection tested successfully",
+        done: false,
+        evidence: "There is no record of a successful connection test.",
+        action: "Test the connection",
+        href: "/sources/source-1",
+        blocked: false,
+      },
+    ],
+    complete: false,
+    generatedAt: "2026-09-04T00:00:00Z",
+    recentRunLimit: 100,
+  };
+
+  function renderSetup(state: unknown) {
+    vi.mocked(useQuery).mockReturnValue({
+      loading: false,
+      path: "/setup",
+      refreshing: false,
+      reload: vi.fn(),
+      data: state,
+    });
+    render(
+      <MemoryRouter>
+        <SystemContext.Provider value={{ devMode: false } as System}>
+          <SetupPage />
+        </SystemContext.Provider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("renders the backend's step state and never recomputes it", () => {
+    renderSetup({
+      ...baseState,
+      nextStep: baseState.steps[1],
+    });
+    expect(screen.getByText("Source configured")).toBeVisible();
+    // The evidence the daemon recorded is shown verbatim; the page does not
+    // reword or re-derive whether a step is done.
+    expect(
+      screen.getByText("There is no record of a successful connection test."),
+    ).toBeVisible();
+    const action = screen.getAllByRole("link", { name: /Test the connection/ });
+    expect(action.length).toBeGreaterThan(0);
+    action.forEach((link) =>
+      expect(link).toHaveAttribute("href", "/sources/source-1"),
+    );
+  });
+
+  it("points an unprovisioned host at the terminal and never offers to fix it", () => {
+    renderSetup({
+      ...baseState,
+      system: {
+        ready: false,
+        checked: true,
+        command: "sudo rotupd setup",
+        mediaAvailable: false,
+        issues: [
+          {
+            id: "helper.installed",
+            title: "Mount helper",
+            status: "ERROR",
+            detail: "/usr/libexec/rotup-mounthelper is not installed",
+            remedy: "Run `sudo rotupd setup`.",
+            critical: true,
+          },
+        ],
+      },
+      steps: [
+        { ...baseState.steps[0], done: false },
+        {
+          id: "BACKUP_DISK_REGISTERED",
+          title: "Backup disk registered",
+          done: false,
+          evidence: "No disk is registered.",
+          action: "Register a backup disk",
+          href: "/disks",
+          blocked: true,
+        },
+      ],
+      nextStep: { ...baseState.steps[0], done: false },
+    });
+
+    expect(screen.getByText("Not provisioned")).toBeVisible();
+    expect(screen.getByText(/is not installed/)).toBeVisible();
+    expect(screen.getAllByText("sudo rotupd setup").length).toBeGreaterThan(0);
+    // A step the host cannot support yet offers no action at all, rather than
+    // a control that would fail.
+    expect(screen.getByText("Needs system setup")).toBeVisible();
+    expect(
+      screen.queryByRole("link", { name: /Register a backup disk/ }),
+    ).not.toBeInTheDocument();
+    // Nothing on this page may attempt privileged provisioning.
+    expect(mutate).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: /provision|install|sudo/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says plainly when the daemon could not inspect its own host", () => {
+    renderSetup({
+      ...baseState,
+      system: { ...baseState.system, checked: false, ready: true },
+      nextStep: null,
+    });
+    expect(
+      screen.getByText("This daemon could not inspect its own host."),
+    ).toBeVisible();
+    // An unchecked host must not be presented as provisioned.
+    expect(screen.queryByText("Provisioned")).not.toBeInTheDocument();
+  });
+
+  it("reports completion only when the backend says every step is confirmed", () => {
+    renderSetup({
+      ...baseState,
+      steps: baseState.steps.map((step) => ({ ...step, done: true })),
+      complete: true,
+      nextStep: null,
+    });
+    expect(screen.getByText("Every setup step is confirmed.")).toBeVisible();
+    expect(screen.getByText("2 of 2 confirmed")).toBeVisible();
   });
 });

@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import { useQuery } from "../api/hooks";
-import type { Dashboard } from "../api/types";
+import type { Dashboard, SetupState } from "../api/types";
 import {
   Alert,
   date,
@@ -18,6 +18,10 @@ import {
 export function DashboardPage() {
   const system = useSystem();
   const query = useQuery<Dashboard>("/dashboard", 15000);
+  // Onboarding truth is derived by the daemon from persisted state. The
+  // dashboard used to recompute it here, which meant two places could disagree
+  // about whether a step was done.
+  const setup = useQuery<SetupState>("/setup", 30000);
   if (query.loading) return <LoadingState />;
   if (query.error)
     return (
@@ -41,66 +45,8 @@ export function DashboardPage() {
     data.sources.some((s) => s.status === "RECOVERY_REQUIRED") ||
     !!data.storage.enumerationError ||
     !data.storage.platformAvailable;
-  // Each unfinished step points at the page that performs it and names the
-  // action, so "what do I do next" never means "work out which subsystem owns
-  // this". The evidence itself is still whatever the backend persisted.
-  const source = data.sources[0];
-  const storage =
-    data.repositories.find((r) => r.established) ?? data.repositories[0];
-  const sourceHref = source ? `/sources/${source.id}` : "/sources/new";
-  const storageDiskConnected = registered.some(
-    (d) => d.id === storage?.diskId && d.observed,
-  );
-  const steps = [
-    {
-      text: "Source configured",
-      done: data.sources.length > 0,
-      href: sourceHref,
-      action: "Add a source",
-    },
-    {
-      text: "Connection test succeeded in recent history",
-      done: data.recentRuns.some(
-        (r) => r.kind === "CONNECTION_TEST" && r.status === "SUCCEEDED",
-      ),
-      href: sourceHref,
-      action: "Test the connection",
-    },
-    {
-      text: "First collection published",
-      done: data.sources.some((s) => s.lastPublishedAt),
-      href: sourceHref,
-      action: "Collect this source",
-    },
-    {
-      text: "Backup disk registered",
-      done: registered.length > 0,
-      href: "/disks",
-      action: "Register a backup disk",
-    },
-    {
-      text: "Backup storage prepared",
-      done: data.repositories.some((r) => r.established),
-      href: registered.length
-        ? `/repositories/new?disk=${encodeURIComponent(registered[0].id)}`
-        : "/disks",
-      action: "Prepare backup storage",
-    },
-    {
-      text: "First durable backup completed",
-      done: !!data.lastSuccessfulBackupAt,
-      // A backup cannot start while its disk is away, so say so instead of
-      // sending the operator to a page whose only button is disabled.
-      href: storage
-        ? storageDiskConnected
-          ? `/repositories/${storage.id}`
-          : `/disks/${storage.diskId}`
-        : "/repositories",
-      action:
-        storage && !storageDiskConnected ? "Connect the disk" : "Back up now",
-    },
-  ];
-  const next = steps.find((s) => !s.done);
+  const next = setup.data?.nextStep ?? null;
+  const steps = setup.data?.steps ?? [];
   return (
     <>
       <PageHeader
@@ -143,6 +89,15 @@ export function DashboardPage() {
         </div>
         <StatusBadge value={data.applicationStatus} />
       </section>
+      {setup.data?.system?.checked && !setup.data.system.ready && (
+        <Alert tone="danger">
+          <strong>This host is not fully provisioned.</strong>
+          <p>
+            Run <code>{setup.data.system.command}</code> on the machine, then
+            refresh. <Link to="/setup">See what is missing →</Link>
+          </p>
+        </Alert>
+      )}
       {(!system.transferEngine.available || !system.backupEngine.available) && (
         <Alert tone="danger">
           <strong>A required tool is unavailable.</strong>
@@ -223,29 +178,40 @@ export function DashboardPage() {
           <Link to="/disks">View disks →</Link>
         </div>
       </section>
-      {!data.lastSuccessfulBackupAt && (
+      {setup.data && !setup.data.complete && (
         <section className="panel">
-          <h2>ROTUP setup</h2>
+          <div className="section-heading">
+            <h2>ROTUP setup</h2>
+            <Link to="/setup">Open setup →</Link>
+          </div>
           <p className="muted">
-            Complete these steps to protect your first local collection.
+            {steps.filter((step) => step.done).length} of {steps.length} steps
+            confirmed from what ROTUP recorded.
           </p>
           <ol className="checklist">
             {steps.map((step) => (
-              <li key={step.text}>
+              <li key={step.id}>
                 <span
-                  aria-label={step.done ? "Complete" : "Not confirmed"}
+                  aria-label={step.done ? "Confirmed" : "Not confirmed"}
                   className={step.done ? "step done" : "step"}
                 >
                   {step.done ? "✓" : "○"}
                 </span>
-                <span>{step.text}</span>
-                <Link to={step.href}>{step.done ? "View" : step.action} →</Link>
+                <span>{step.title}</span>
+                {step.done ? (
+                  <Link to={step.href}>View →</Link>
+                ) : step.blocked ? (
+                  <Link to="/setup">Needs system setup →</Link>
+                ) : (
+                  <Link to={step.href}>{step.action} →</Link>
+                )}
               </li>
             ))}
           </ol>
           <p className="muted small">
-            Connection evidence is limited to the latest {data.recentRunLimit}{" "}
-            runs. An unconfirmed step does not prove it never happened.
+            Connection evidence is limited to the latest{" "}
+            {setup.data.recentRunLimit} runs. An unconfirmed step does not prove
+            it never happened.
           </p>
         </section>
       )}

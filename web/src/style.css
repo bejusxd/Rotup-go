@@ -610,3 +610,40 @@ dd {
     margin-bottom: 10px;
   }
 }
+.setup-steps,
+.issue-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+.setup-step,
+.issue-list li {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 0;
+  border-top: 1px solid var(--border);
+}
+.issue-list li {
+  align-items: flex-start;
+}
+.setup-step-body,
+.issue-list li div {
+  min-width: 0;
+  flex: 1;
+}
+.setup-step-body p,
+.issue-list li p {
+  margin: 3px 0 0;
+}
+.setup-step.current {
+  background: var(--accent-soft);
+  border-radius: 6px;
+  padding: 13px 14px;
+  margin: 0 -14px;
+}
+.setup-step > a:last-child,
+.setup-step > span:last-child {
+  flex: none;
+  font-size: 12px;
+}

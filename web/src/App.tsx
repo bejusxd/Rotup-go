@@ -33,6 +33,7 @@ import {
   RepositorySetupPage,
 } from "./pages/Repositories";
 import { DebugPage } from "./pages/Debug";
+import { SetupPage } from "./pages/Setup";
 
 function AppShell() {
   const system = useSystem();
@@ -58,6 +59,7 @@ function AppShell() {
         <nav aria-label="Main navigation">
           {[
             ["/", "Overview"],
+            ["/setup", "Setup"],
             ["/sources", "Sources"],
             ["/disks", "Disks"],
             ["/repositories", "Backup storage"],
@@ -138,6 +140,7 @@ export default function App() {
       <Routes>
         <Route element={<AppShell />}>
           <Route index element={<DashboardPage />} />
+          <Route path="setup" element={<SetupPage />} />
           <Route path="sources" element={<SourcesPage />} />
           <Route path="sources/new" element={<SourceNewPage />} />
           <Route path="sources/:id" element={<SourcePage />} />
