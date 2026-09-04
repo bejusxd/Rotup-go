@@ -6,6 +6,7 @@ import {
   date,
   ErrorAlert,
   JsonDetails,
+  label,
   LoadingState,
   PageHeader,
   RunList,
@@ -40,38 +41,63 @@ export function DashboardPage() {
     data.sources.some((s) => s.status === "RECOVERY_REQUIRED") ||
     !!data.storage.enumerationError ||
     !data.storage.platformAvailable;
+  // Each unfinished step points at the page that performs it and names the
+  // action, so "what do I do next" never means "work out which subsystem owns
+  // this". The evidence itself is still whatever the backend persisted.
+  const source = data.sources[0];
+  const storage =
+    data.repositories.find((r) => r.established) ?? data.repositories[0];
+  const sourceHref = source ? `/sources/${source.id}` : "/sources/new";
+  const storageDiskConnected = registered.some(
+    (d) => d.id === storage?.diskId && d.observed,
+  );
   const steps = [
     {
       text: "Source configured",
       done: data.sources.length > 0,
-      href: "/sources",
+      href: sourceHref,
+      action: "Add a source",
     },
     {
       text: "Connection test succeeded in recent history",
       done: data.recentRuns.some(
         (r) => r.kind === "CONNECTION_TEST" && r.status === "SUCCEEDED",
       ),
-      href: "/sources",
+      href: sourceHref,
+      action: "Test the connection",
     },
     {
       text: "First collection published",
       done: data.sources.some((s) => s.lastPublishedAt),
-      href: "/sources",
+      href: sourceHref,
+      action: "Collect this source",
     },
     {
       text: "Backup disk registered",
       done: registered.length > 0,
       href: "/disks",
+      action: "Register a backup disk",
     },
     {
       text: "Backup storage prepared",
       done: data.repositories.some((r) => r.established),
-      href: "/repositories",
+      href: registered.length
+        ? `/repositories/new?disk=${encodeURIComponent(registered[0].id)}`
+        : "/disks",
+      action: "Prepare backup storage",
     },
     {
       text: "First durable backup completed",
       done: !!data.lastSuccessfulBackupAt,
-      href: "/repositories",
+      // A backup cannot start while its disk is away, so say so instead of
+      // sending the operator to a page whose only button is disabled.
+      href: storage
+        ? storageDiskConnected
+          ? `/repositories/${storage.id}`
+          : `/disks/${storage.diskId}`
+        : "/repositories",
+      action:
+        storage && !storageDiskConnected ? "Connect the disk" : "Back up now",
     },
   ];
   const next = steps.find((s) => !s.done);
@@ -89,11 +115,7 @@ export function DashboardPage() {
           {query.refreshing ? "Refreshing…" : "Refresh"}
         </button>
         <Link className="button" to={next?.href ?? "/repositories"}>
-          {!data.sources.length
-            ? "Add a source"
-            : next
-              ? "Continue setup"
-              : "Manage backups"}
+          {next ? next.action : "Back up again"}
         </Link>
       </PageHeader>
       <section
@@ -105,15 +127,18 @@ export function DashboardPage() {
             {needsAttention
               ? "Some items need attention"
               : !data.lastSuccessfulBackupAt
-                ? "No USB backup recorded yet"
-                : "Backup history is available"}
+                ? "No backup to a disk has completed yet"
+                : "No current problem detected"}
           </h2>
           <p>
             {data.lastSuccessfulBackupAt
-              ? "Last durable backup completed " +
+              ? "Last completed backup: " +
                 date(data.lastSuccessfulBackupAt) +
                 ". Review each disk below; this does not guarantee every source is current."
-              : "No completed durable backup is recorded yet. A collected local copy is not a USB backup."}
+              : "No completed backup to a disk is recorded yet. A collected local copy stays on this machine and is not a backup."}
+            {latestFailure && !needsAttention
+              ? " The most recent recorded failure is shown below."
+              : ""}
           </p>
         </div>
         <StatusBadge value={data.applicationStatus} />
@@ -133,6 +158,24 @@ export function DashboardPage() {
       {!data.storage.platformAvailable && (
         <Alert>
           Media support is unavailable. {data.storage.platformReason}
+        </Alert>
+      )}
+      {latestFailure && (
+        <Alert tone="warning">
+          <strong>
+            {label(latestFailure.kind)} did not complete ·{" "}
+            {date(latestFailure.finishedAt ?? latestFailure.requestedAt)}
+          </strong>
+          <p>
+            {latestFailure.error?.userMessage ||
+              latestFailure.summary ||
+              "No result detail was recorded."}
+          </p>
+          <Link to={`/runs/${latestFailure.id}`}>Review recorded result →</Link>
+          <p className="small">
+            This is the latest recorded failure, not a live check; a later
+            operation may already have resolved it.
+          </p>
         </Alert>
       )}
       <section className="metrics" aria-label="System summary">
@@ -175,7 +218,7 @@ export function DashboardPage() {
                   {step.done ? "✓" : "○"}
                 </span>
                 <span>{step.text}</span>
-                <Link to={step.href}>{step.done ? "View" : "Continue"} →</Link>
+                <Link to={step.href}>{step.done ? "View" : step.action} →</Link>
               </li>
             ))}
           </ol>
@@ -218,16 +261,6 @@ export function DashboardPage() {
           ))}
         </section>
       </div>
-      {latestFailure && (
-        <Alert tone="warning">
-          <strong>Most recent failed or interrupted run</strong>
-          <p>{latestFailure.error?.userMessage || latestFailure.summary}</p>
-          <Link to={`/runs/${latestFailure.id}`}>Review recorded result →</Link>
-          <p className="small">
-            Historical result; a later operation may have resolved it.
-          </p>
-        </Alert>
-      )}
       <section className="panel">
         <div className="section-heading">
           <h2>Recent activity</h2>

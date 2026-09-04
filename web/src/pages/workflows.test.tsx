@@ -305,3 +305,55 @@ describe("disk registration guidance", () => {
     expect(screen.getByText("374 MB")).toBeVisible();
   });
 });
+
+describe("setup guidance", () => {
+  it("names the next action and points it at the page that performs it", () => {
+    vi.mocked(useQuery).mockReturnValue({
+      loading: false,
+      path: "/dashboard",
+      refreshing: false,
+      reload: vi.fn(),
+      data: {
+        applicationStatus: "running",
+        databaseStatus: "ok",
+        sources: [
+          { id: "source-1", name: "Photos", enabled: true, status: "STABLE" },
+        ],
+        repositories: [],
+        recentRuns: [],
+        recentRunLimit: 100,
+        lastSuccessfulBackupAt: null,
+        storage: {
+          disks: [],
+          enumerationError: "",
+          platformAvailable: true,
+          platformReason: "",
+        },
+      },
+    });
+    render(
+      <MemoryRouter>
+        <SystemContext.Provider
+          value={
+            {
+              transferEngine: { available: true },
+              backupEngine: { available: true },
+            } as System
+          }
+        >
+          <DashboardPage />
+        </SystemContext.Provider>
+      </MemoryRouter>,
+    );
+    // The source exists but has never been tested, so that is the next step
+    // and it belongs on that source's own page, not on a list.
+    const next = screen.getAllByRole("link", { name: /Test the connection/ });
+    expect(next.length).toBeGreaterThan(0);
+    next.forEach((link) =>
+      expect(link).toHaveAttribute("href", "/sources/source-1"),
+    );
+    expect(
+      screen.queryByRole("link", { name: /Continue setup/ }),
+    ).not.toBeInTheDocument();
+  });
+});

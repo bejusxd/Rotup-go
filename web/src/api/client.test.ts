@@ -27,21 +27,19 @@ describe("same-origin API client", () => {
   it("keeps the structured backend refusal and does not retry mutations", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          Response.json(
-            {
-              error: {
-                code: "ambiguous_identity",
-                class: "INTEGRITY",
-                message: "Duplicate UUID.",
-                userMessage: "The disk cannot be used safely.",
-              },
+      vi.fn().mockResolvedValue(
+        Response.json(
+          {
+            error: {
+              code: "ambiguous_identity",
+              class: "INTEGRITY",
+              message: "Duplicate UUID.",
+              userMessage: "The disk cannot be used safely.",
             },
-            { status: 409 },
-          ),
+          },
+          { status: 409 },
         ),
+      ),
     );
     await expect(mutate("/disks/disk-1/mount")).rejects.toMatchObject({
       detail: { code: "ambiguous_identity", class: "INTEGRITY" },
