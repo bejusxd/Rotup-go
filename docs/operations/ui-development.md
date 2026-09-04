@@ -1,9 +1,101 @@
-# UI modernization checkpoint
+# UI development and validation
 
 This is a local React/Vite migration over the existing Go services, not M5.
 The backend remains authoritative for validation, credentials, collection,
 staging barriers, UUID identity, setup/escrow, backup durability and recovery.
 `docs/ARCHITECTURE.md` is unchanged.
+
+## Current status
+
+The React migration is implemented: versioned API, explicit development mode,
+all requested page families, same-origin Vite development, embedded production
+assets and an intact `/legacy` interface. The sections below record historical
+checkpoints; their "remaining" lists describe that point in time, not current
+missing features. M4 real-media acceptance remains separate and is not declared
+complete by this UI work. No M5 work was started.
+
+### Commands
+
+```sh
+# Development, terminal 1 (keep existing engine/media environment variables)
+ROTUP_DEV_MODE=true go run ./cmd/rotupd
+```
+
+From the repository root in a second terminal:
+
+```sh
+# Development, terminal 2
+cd web
+npm ci
+npm run dev
+# Open http://127.0.0.1:5173
+```
+
+From the repository root, after stopping Vite:
+
+```sh
+# Verification and production build
+cd web
+npm ci
+npm test
+npm run typecheck
+npm run build
+cd ..
+go test ./...
+go vet ./...
+go build ./cmd/rotupd
+go build -o .cache/ui/rotup-mounthelper ./cmd/rotup-mounthelper
+# Run with ROTUP_DEV_MODE=false (the default); open http://127.0.0.1:8080
+```
+
+Run installs before Go's `./...` commands, not concurrently: Go walks the source
+tree and can encounter disappearing package folders during `npm ci`. Windows
+also holds Vite's native module open while Vite runs, so stop it before `npm ci`.
+No extra permission or elevated daemon is needed. The install lockfile was
+verified with Node 24/npm; WSL Go builds consume the same platform-neutral dist.
+
+### Routes
+
+React: `/`, `/sources`, `/sources/new`, `/sources/:id`, `/sources/:id/edit`,
+`/disks`, `/disks/:id`, `/repositories`, `/repositories/new`,
+`/repositories/:id`, `/runs`, `/runs/:id`, `/debug` (development only).
+The old staging browser, event log and revision coverage diagnostics remain
+under `/legacy`, linked from the SPA. Production debug API returns JSON 404.
+
+### Final validation and limits
+
+- Frontend: clean `npm ci`, 14 tests, typecheck and build passed. No lint command
+  is configured. Runtime dependencies are React, React DOM and React Router;
+  there is no UI framework, state-management library or Node production server.
+- Linux: formatting of all tracked Go files, `go test ./...`, `go vet ./...`,
+  daemon and helper builds all passed (exit 0) again after the final regression
+  changes. `gofmt -l` returned no files. Architecture and core service/adaptor
+  directories have no diff from the starting commit.
+- Browser: dashboard; source list/detail; real connection test and collection;
+  disk list/detail (including disconnected identity); repository list/detail;
+  existing-storage initialization guard; run list/detail; nested source refresh;
+  validation refusal plus exact error details; legacy links; production debug
+  hiding; mobile dashboard (390 px viewport, no horizontal overflow); embedded
+  build with Vite stopped. No production-page JavaScript errors were observed.
+- The two real source operations and their results are recorded below. Browser
+  password replacement, new-media registration, repository initialization,
+  backup and recovery were not executed against real media for this UI task;
+  facade delegation and frontend safety tests cover their request boundaries.
+- History remains bounded to 100 runs, as before. Latest successful verification
+  is available only when found in that window. No pagination or new retention
+  behavior was introduced. Current display names are not part of the immutable
+  backup read-set; run details retain the recorded identifiers and state versions.
+- M4 loop/USB/restic acceptance and opt-in real-engine spikes were not rerun as
+  part of this UI-only change. Do not infer M4 acceptance from UI tests.
+
+### Next task
+
+Continue the existing M4 acceptance drill through the new UI with the intended
+test disk connected. Verify explicit setup/adoption on disposable storage,
+manual backup durable success, interrupted/suspect recovery, and idle unmount.
+Keep the existing helper, UUID, staging and success-boundary checks unchanged.
+Do not initialize over the established repository, do not modify the architecture,
+and do not start M5. UI features are not blocked on that separate acceptance drill.
 
 ## Checkpoint 1: JSON API and development-mode foundation
 
@@ -188,3 +280,18 @@ preserve the repository's tracked prebuilt helper. Frontend build/typecheck and
 13 tests passed. Source files were formatted for readable future maintenance.
 The production bundle was started as the normal WSL user, using the existing
 database and helper wrapper, with `ROTUP_DEV_MODE=false` for browser validation.
+
+## Checkpoint 6: final regressions and handoff
+
+Added explicit errors for common configuration/mount refusals while retaining
+the original class/code/safe message. Dashboard tool/media failures are surfaced
+instead of being obscured by historical success. History shows source names,
+stored repository targets, summaries and finish times; the exact captured backup
+read-set is tested independently of current source configuration. Candidate-only
+snapshots remain unproven. The production bundle and source were rebuilt together.
+
+Final checks: 14 frontend tests; clean dependency installation; typecheck and
+build; full Linux Go tests, vet, daemon build and helper build all passed. A
+transient Windows native-module lock during an initial install was resolved by
+stopping Vite. An overlapping Go package scan/install was rerun sequentially and
+passed. No tests were disabled or assertions removed to resolve these issues.

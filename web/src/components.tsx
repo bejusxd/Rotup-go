@@ -299,7 +299,7 @@ export function RunList({
           <tr>
             <th>Operation</th>
             <th>Result</th>
-            <th>Source</th>
+            <th>Source / storage</th>
             <th>Started / requested</th>
             <th>Duration</th>
           </tr>
@@ -309,6 +309,9 @@ export function RunList({
             <tr key={run.id}>
               <td>
                 <Link to={`/runs/${run.id}`}>{label(run.kind)}</Link>
+                {run.summary && (
+                  <small className="run-summary">{run.summary}</small>
+                )}
               </td>
               <td>
                 <StatusBadge value={run.status} />
@@ -317,11 +320,20 @@ export function RunList({
                 {sources[run.sourceId] ||
                   (run.sourceId ? (
                     <Link to={`/sources/${run.sourceId}`}>View source</Link>
+                  ) : run.repositoryId ? (
+                    <Link to={`/repositories/${run.repositoryId}`}>
+                      Backup storage
+                    </Link>
                   ) : (
                     "—"
                   ))}
               </td>
-              <td>{date(run.startedAt ?? run.requestedAt)}</td>
+              <td>
+                {date(run.startedAt ?? run.requestedAt)}
+                {run.finishedAt && (
+                  <small>Finished {date(run.finishedAt)}</small>
+                )}
+              </td>
               <td>
                 {run.terminal
                   ? `${(run.durationMs / 1000).toFixed(1)} s`

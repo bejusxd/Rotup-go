@@ -48,6 +48,67 @@ func TestAPIOperationTargetsAreAllowlisted(t *testing.T) {
 	}
 }
 
+func TestAPIFriendlyErrorKeepsOriginalDiagnostic(t *testing.T) {
+	s := newTestServer(t)
+	s.backend.createErr = domain.NewError(domain.ErrClassConfiguration, "invalid_host", "exact safe host validation detail")
+	w := apiRequest(t, s.handler, "POST", "/api/v1/sources", `{}`, true)
+	for _, expected := range []string{"invalid_host", "CONFIGURATION", "exact safe host validation detail", "Enter a server name or IP address"} {
+		if w.Code != 400 || !strings.Contains(w.Body.String(), expected) {
+			t.Fatalf("error missing %q: %d %s", expected, w.Code, w.Body.String())
+		}
+	}
+}
+
+type apiBackupRead struct {
+	backup domain.BackupRun
+	err    error
+}
+
+func (f apiBackupRead) BackupRun(context.Context, string) (*domain.BackupRun, error) {
+	return &f.backup, f.err
+}
+func (f apiBackupRead) BackupSourceStates(context.Context, string) ([]domain.BackupSourceState, error) {
+	return []domain.BackupSourceState{{SourceID: "captured-source", CurrentCollectionRunID: "captured-collection", StagingStateVersion: 42, CurrentRelativePath: "captured/current"}}, nil
+}
+func (f apiBackupRead) BackupRevisionBatches(context.Context, string) ([]domain.BackupRevisionBatch, error) {
+	return []domain.BackupRevisionBatch{{RevisionBatchID: "captured-batch", SourceID: "captured-source", RelativePath: "captured/revisions"}}, nil
+}
+func (f apiBackupRead) Repository(context.Context, string) (*domain.Repository, error) {
+	return nil, nil
+}
+func (f apiBackupRead) RevisionCoverageForBatch(context.Context, string) ([]domain.RevisionCoverage, error) {
+	return nil, nil
+}
+
+func TestAPIBackupHistoryUsesRecordedTargetsAndReadSet(t *testing.T) {
+	backend := newFakeBackend()
+	backend.runs = []domain.Run{{ID: "backup-one", Kind: domain.RunKindBackupLatest, Status: domain.RunStatusFailed}}
+	read := apiBackupRead{backup: domain.BackupRun{RunID: "backup-one", RepositoryID: "captured-repo", DiskID: "captured-disk", Stage: domain.StageSnapshotCreated, Durability: domain.DurabilityUnproven, CandidateSnapshotID: "candidate-only", SelectedSourceIDs: []string{"captured-source"}}}
+	h, err := NewHandler(Deps{Status: backend, Repo: backend, BackupRepo: read})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := apiRequest(t, h, "GET", "/api/v1/runs", "", false)
+	if list.Code != 200 || !strings.Contains(list.Body.String(), `"repositoryId":"captured-repo"`) {
+		t.Fatalf("missing recorded target: %d %s", list.Code, list.Body.String())
+	}
+	detail := apiRequest(t, h, "GET", "/api/v1/runs/backup-one", "", false)
+	for _, expected := range []string{"captured-collection", "captured-batch", `"stateVersion":42`, "candidate-only", `"durableSuccessAt":null`, `"durability":"UNPROVEN"`} {
+		if detail.Code != 200 || !strings.Contains(detail.Body.String(), expected) {
+			t.Fatalf("missing %s: %d %s", expected, detail.Code, detail.Body.String())
+		}
+	}
+	read.err = errors.New("SECRET-driver-error")
+	h, err = NewHandler(Deps{Status: backend, Repo: backend, BackupRepo: read})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := apiRequest(t, h, "GET", "/api/v1/runs", "", false)
+	if failed.Code != 500 || strings.Contains(failed.Body.String(), "SECRET-driver-error") {
+		t.Fatalf("unsafe history failure: %d %s", failed.Code, failed.Body.String())
+	}
+}
+
 func apiRequest(t *testing.T, handler http.Handler, method, path, body string, csrf bool) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(method, path, strings.NewReader(body))

@@ -5,6 +5,7 @@ import { CredentialForm, SourceForm } from "./Sources";
 import { RunPage } from "./Runs";
 import { RepositoryPage, RepositorySetupPage } from "./Repositories";
 import { DebugPage } from "./Debug";
+import { DashboardPage } from "./Dashboard";
 import { SystemContext } from "../components";
 import { mutate } from "../api/client";
 import { useQuery } from "../api/hooks";
@@ -121,6 +122,42 @@ describe("backup success presentation", () => {
 });
 
 describe("backend-owned storage safety", () => {
+  it("surfaces missing backup tools without claiming a completed backup", () => {
+    vi.mocked(useQuery).mockReturnValue({
+      loading: false,
+      path: "",
+      reload: vi.fn(),
+      data: {
+        applicationStatus: "running",
+        databaseStatus: "ok",
+        sources: [],
+        repositories: [],
+        recentRuns: [],
+        recentRunLimit: 100,
+        lastSuccessfulBackupAt: null,
+        storage: { disks: [], enumerationError: "", platformAvailable: true },
+      },
+    });
+    render(
+      <MemoryRouter>
+        <SystemContext.Provider
+          value={
+            {
+              transferEngine: { available: true },
+              backupEngine: { available: false },
+            } as System
+          }
+        >
+          <DashboardPage />
+        </SystemContext.Provider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("Some items need attention")).toBeVisible();
+    expect(
+      screen.getByText(/One or more backup tools are unavailable/),
+    ).toBeVisible();
+    expect(screen.getByText("Not yet completed")).toBeVisible();
+  });
   it("uses backend eligibility and does not start anything when viewing storage", () => {
     vi.mocked(useQuery).mockReturnValue({
       loading: false,

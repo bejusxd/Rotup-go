@@ -11,9 +11,11 @@ import {
   RunList,
   StatusBadge,
   TechnicalDetails,
+  useSystem,
 } from "../components";
 
 export function DashboardPage() {
+  const system = useSystem();
   const query = useQuery<Dashboard>("/dashboard", 15000);
   if (query.loading) return <LoadingState />;
   if (query.error)
@@ -27,9 +29,13 @@ export function DashboardPage() {
   const data = query.data!;
   const registered = data.storage.disks.filter((d) => d.registered);
   const latestFailure = data.recentRuns.find((r) =>
-    ["FAILED", "INTERRUPTED"].includes(r.status),
+    ["FAILED", "INTERRUPTED", "PARTIAL"].includes(r.status),
   );
   const needsAttention =
+    data.applicationStatus !== "running" ||
+    !system.transferEngine.available ||
+    !system.backupEngine.available ||
+    registered.some((d) => d.status === "ERROR" || d.ambiguous) ||
     data.repositories.some((r) => r.health !== "HEALTHY") ||
     data.sources.some((s) => s.status === "RECOVERY_REQUIRED") ||
     !!data.storage.enumerationError ||
@@ -79,7 +85,11 @@ export function DashboardPage() {
           Refresh
         </button>
         <Link className="button" to={next?.href ?? "/repositories"}>
-          {!data.sources.length ? "Add a source" : next ? "Continue setup" : "Manage backups"}
+          {!data.sources.length
+            ? "Add a source"
+            : next
+              ? "Continue setup"
+              : "Manage backups"}
         </Link>
       </PageHeader>
       <section
@@ -104,6 +114,13 @@ export function DashboardPage() {
         </div>
         <StatusBadge value={data.applicationStatus} />
       </section>
+      {(!system.transferEngine.available || !system.backupEngine.available) && (
+        <Alert tone="danger">
+          One or more backup tools are unavailable. Collections need rclone;
+          disk backups need restic. Check the tool configuration before starting
+          an operation.
+        </Alert>
+      )}
       {data.storage.enumerationError && (
         <Alert tone="danger">
           Disk discovery failed: {data.storage.enumerationError}
@@ -222,6 +239,8 @@ export function DashboardPage() {
           value={{
             applicationStatus: data.applicationStatus,
             databaseStatus: data.databaseStatus,
+            transferEngine: system.transferEngine,
+            backupEngine: system.backupEngine,
             lastSuccessfulBackupAt: data.lastSuccessfulBackupAt,
           }}
         />

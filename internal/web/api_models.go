@@ -71,7 +71,7 @@ func runInfo(r domain.Run) runDTO {
 		}
 	}
 	if r.ErrorCode != "" || r.SafeError != "" {
-		v.Error = &apiErrorDTO{r.ErrorCode, string(r.ErrorClass), r.SafeError, userErrorMessage(string(r.ErrorClass))}
+		v.Error = &apiErrorDTO{r.ErrorCode, string(r.ErrorClass), r.SafeError, userErrorMessage(string(r.ErrorClass), r.ErrorCode)}
 	}
 	return v
 }

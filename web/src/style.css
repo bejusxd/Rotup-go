@@ -402,6 +402,10 @@ td a {
 td small {
   display: block;
 }
+.run-summary {
+  max-width: 34ch;
+  margin-top: 4px;
+}
 .technical {
   border-top: 1px solid var(--border);
   padding-top: 12px;

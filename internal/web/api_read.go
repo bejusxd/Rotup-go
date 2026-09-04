@@ -213,10 +213,26 @@ func (h *handler) apiRuns(w http.ResponseWriter, r *http.Request) {
 		h.apiError(w, err)
 		return
 	}
+	items := runList(runs)
+	if h.deps.BackupRepo != nil {
+		for i, run := range runs {
+			if run.Kind != domain.RunKindBackupLatest {
+				continue
+			}
+			b, err := h.deps.BackupRepo.BackupRun(r.Context(), run.ID)
+			if err != nil {
+				h.apiError(w, err)
+				return
+			}
+			if b != nil {
+				items[i].RepositoryID, items[i].DiskID = b.RepositoryID, b.DiskID
+			}
+		}
+	}
 	h.apiJSON(w, 200, struct {
 		Runs  []runDTO `json:"runs"`
 		Limit int      `json:"limit"`
-	}{runList(runs), 100})
+	}{items, 100})
 }
 func (h *handler) apiRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

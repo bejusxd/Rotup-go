@@ -102,11 +102,21 @@ func (h *handler) apiFailure(w http.ResponseWriter, status int, code, class, mes
 	h.apiJSON(w, status, struct {
 		Error apiErrorDTO `json:"error"`
 	}{
-		apiErrorDTO{Code: code, Class: class, Message: message, UserMessage: userErrorMessage(class)},
+		apiErrorDTO{Code: code, Class: class, Message: message, UserMessage: userErrorMessage(class, code)},
 	})
 }
 
-func userErrorMessage(class string) string {
+func userErrorMessage(class, code string) string {
+	switch code {
+	case "invalid_host":
+		return "Enter a server name or IP address, without a URL prefix or share path."
+	case "invalid_staging_path", "staging_overlap":
+		return "Choose a separate relative folder for this source's local copy."
+	case "csrf_rejected":
+		return "Reload this page before submitting again. The page security token is no longer valid."
+	case "mount_helper_device_not_found":
+		return "The backup disk could not be mounted. Check that the registered disk is connected."
+	}
 	switch domain.ErrorClass(class) {
 	case domain.ErrClassAuthentication:
 		return "Check the username and saved password."

@@ -1,7 +1,7 @@
 import { Link, useParams } from "react-router";
 import { RequestError } from "../api/client";
 import { useQuery } from "../api/hooks";
-import type { Run, RunDetail } from "../api/types";
+import type { Run, RunDetail, Source } from "../api/types";
 import {
   Alert,
   date,
@@ -16,6 +16,7 @@ import {
 } from "../components";
 
 export function RunsPage() {
+  const sourceQuery = useQuery<{ sources: Source[] }>("/sources", 15000);
   const query = useQuery<{ runs: Run[]; limit: number }>("/runs", 5000);
   return (
     <>
@@ -27,6 +28,7 @@ export function RunsPage() {
           Refresh
         </button>
       </PageHeader>
+      {!!sourceQuery.error && <ErrorAlert error={sourceQuery.error} />}
       {query.loading ? (
         <LoadingState />
       ) : query.error ? (
@@ -37,7 +39,12 @@ export function RunsPage() {
             Latest {query.data!.limit} runs. This is a bounded view, not a
             deletion of older audit records.
           </p>
-          <RunList runs={query.data!.runs} />
+          <RunList
+            runs={query.data!.runs}
+            sources={Object.fromEntries(
+              (sourceQuery.data?.sources ?? []).map((s) => [s.id, s.name]),
+            )}
+          />
         </section>
       )}
     </>
