@@ -14,6 +14,7 @@ import {
   EmptyState,
   ErrorAlert,
   LoadingState,
+  PageHeader,
   SystemContext,
   useSystem,
 } from "./components";
@@ -149,14 +150,7 @@ export default function App() {
           <Route path="runs" element={<RunsPage />} />
           <Route path="runs/:id" element={<RunPage />} />
           <Route path="debug" element={<DebugPage />} />
-          <Route
-            path="*"
-            element={
-              <EmptyState title="Page not found">
-                <Link to="/">Return to overview</Link>
-              </EmptyState>
-            }
-          />
+          <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Routes>
     </SystemContext.Provider>
@@ -164,4 +158,18 @@ export default function App() {
 }
 function PageBoot() {
   return <h1>ROTUP</h1>;
+}
+// Every routed view owns a level-one heading and a document title, so a page
+// reached by a stale bookmark is announced like any other.
+function NotFoundPage() {
+  return (
+    <>
+      <PageHeader title="Page not found" />
+      <EmptyState title="This address does not match a ROTUP page">
+        <p>
+          <Link to="/">Return to overview</Link>
+        </p>
+      </EmptyState>
+    </>
+  );
 }

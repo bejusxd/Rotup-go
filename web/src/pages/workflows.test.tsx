@@ -252,6 +252,9 @@ describe("backend-owned storage safety", () => {
     expect(
       screen.getByText("Development diagnostics are disabled."),
     ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Page not found" }),
+    ).toBeVisible();
     expect(useQuery).not.toHaveBeenCalled();
   });
 });

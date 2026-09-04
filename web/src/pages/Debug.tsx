@@ -15,9 +15,12 @@ import {
 export function DebugPage() {
   if (!useSystem().devMode)
     return (
-      <EmptyState title="Page not found">
-        <p>Development diagnostics are disabled.</p>
-      </EmptyState>
+      <>
+        <PageHeader title="Page not found" />
+        <EmptyState title="Diagnostics are not available">
+          <p>Development diagnostics are disabled.</p>
+        </EmptyState>
+      </>
     );
   return <DebugStatusPage />;
 }
