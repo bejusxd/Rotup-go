@@ -113,6 +113,26 @@ export function duration(ms: number) {
   return `${Math.floor(seconds / 3600)} h ${Math.floor((seconds % 3600) / 60)} min`;
 }
 
+// Disk error codes are backend vocabulary. Normal mode explains what the code
+// means for the operator; the raw code always stays available in technical
+// details so an audit or a bug report can still quote it exactly.
+const diskErrorExplanations: Record<string, string> = {
+  ambiguous_identity:
+    "More than one connected filesystem reports this identity, so ROTUP cannot tell them apart.",
+  unsupported_filesystem:
+    "ROTUP does not support this filesystem for backup storage.",
+  external_mount: "This disk is already mounted outside ROTUP.",
+  mount_failed: "ROTUP could not mount this disk.",
+  identity_mismatch:
+    "The connected filesystem does not match the identity recorded for this disk.",
+  sync_failed: "Pending writes could not be flushed to this disk.",
+  unmount_failed: "This disk could not be unmounted; do not remove it yet.",
+  removed_during_operation:
+    "This disk was disconnected while ROTUP was using it.",
+};
+export const diskErrorExplanation = (code: string) =>
+  diskErrorExplanations[code] ?? "This disk needs attention.";
+
 export function StatusBadge({ value }: { value: string }) {
   const good = [
     "STABLE",

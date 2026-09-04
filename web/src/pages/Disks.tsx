@@ -2,13 +2,14 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { mutate } from "../api/client";
 import { useQuery } from "../api/hooks";
-import type { Disk, DisksResponse } from "../api/types";
+import type { Disk, DisksResponse, Repository } from "../api/types";
 import {
   ActionButton,
   Alert,
   bytes,
   ConfirmDialog,
   date,
+  diskErrorExplanation,
   EmptyState,
   ErrorAlert,
   JsonDetails,
@@ -97,8 +98,9 @@ export function DisksPage() {
           <section className="panel">
             <h2>Available to register</h2>
             <p className="muted">
-              Select by filesystem identity, never by a device name. No
-              formatting is performed.
+              Register only a disk you recognise as yours to use for backups.
+              ROTUP tracks it by filesystem identity, never by a device name,
+              and never formats or erases anything.
             </p>
             {query
               .data!.disks.filter((d) => !d.registered)
@@ -114,9 +116,23 @@ export function DisksPage() {
     </>
   );
 }
+// A filesystem ROTUP will not register must say why in words the operator can
+// act on. The refusal itself stays with the backend; this only explains the
+// state the disk list already reports.
+function registrationRefusal(disk: Disk) {
+  if (disk.ambiguous)
+    return "More than one connected filesystem reports this identity, so ROTUP cannot tell them apart. Disconnect the others and refresh.";
+  if (!disk.supported)
+    return `ROTUP cannot use ${disk.filesystemType || "this filesystem"} for backup storage. Use a supported filesystem, such as ext4.`;
+  if (!disk.filesystemUuid)
+    return "This filesystem has no UUID. ROTUP identifies a backup disk by its filesystem UUID and will not track one it cannot name.";
+  if (disk.errorCode) return diskErrorExplanation(disk.errorCode);
+  return "";
+}
 function RegisterDisk({ disk }: { disk: Disk }) {
   const [name, setName] = useState(disk.name || "");
   const navigate = useNavigate();
+  const refusal = registrationRefusal(disk);
   return (
     <div className="registration">
       <h3>
@@ -124,12 +140,16 @@ function RegisterDisk({ disk }: { disk: Disk }) {
         {disk.filesystemType || "Unknown filesystem"}
       </h3>
       <p>{bytes(disk.sizeBytes)}</p>
-      <p className="small">
-        Filesystem UUID: <code>{disk.filesystemUuid || "Missing"}</code>
-      </p>
-      {!disk.supported || disk.ambiguous || !disk.filesystemUuid ? (
+      {refusal ? (
         <Alert>
-          This filesystem cannot be registered safely. {disk.errorCode}
+          <strong>This filesystem cannot be registered.</strong>
+          <p>{refusal}</p>
+          <TechnicalDetails>
+            <p>
+              Filesystem UUID: <code>{disk.filesystemUuid || "missing"}</code>
+            </p>
+            {!!disk.errorCode && <code>{disk.errorCode}</code>}
+          </TechnicalDetails>
         </Alert>
       ) : (
         <>
@@ -164,9 +184,14 @@ function RegisterDisk({ disk }: { disk: Disk }) {
           </ConfirmDialog>
         </>
       )}
-      <TechnicalDetails>
-        <JsonDetails value={disk} />
-      </TechnicalDetails>
+      {!refusal && (
+        <TechnicalDetails>
+          <p>
+            Filesystem UUID: <code>{disk.filesystemUuid}</code>
+          </p>
+          <JsonDetails value={disk} />
+        </TechnicalDetails>
+      )}
     </div>
   );
 }
@@ -176,21 +201,40 @@ export function DiskPage() {
     `/disks/${encodeURIComponent(id!)}`,
     10000,
   );
+  // Backup storage already prepared on this disk is what the operator wants
+  // next; sending them through the preparation form only to be told it exists
+  // is a detour.
+  const repositories = useQuery<{ repositories: Repository[] }>(
+    "/repositories",
+  );
   if (query.loading) return <LoadingState />;
   if (query.error) return <ErrorAlert error={query.error} />;
   const d = query.data!.disk;
+  const storage = repositories.data?.repositories.find(
+    (r) => r.diskId === d.id,
+  );
   return (
     <>
       <PageHeader
         title={d.name}
-        description="The filesystem UUID is this disk’s permanent identity."
+        description={
+          d.observed
+            ? "This disk is connected now."
+            : "This disk is not connected. Connect it before a backup."
+        }
       >
-        <Link
-          className="button"
-          to={`/repositories/new?disk=${encodeURIComponent(d.id)}`}
-        >
-          Manage backup storage
-        </Link>
+        {storage ? (
+          <Link className="button" to={`/repositories/${storage.id}`}>
+            Open backup storage
+          </Link>
+        ) : (
+          <Link
+            className="button"
+            to={`/repositories/new?disk=${encodeURIComponent(d.id)}`}
+          >
+            Prepare for backups
+          </Link>
+        )}
       </PageHeader>
       {query.data!.enumerationError && (
         <Alert tone="danger">
@@ -199,7 +243,8 @@ export function DiskPage() {
       )}
       {!!d.errorCode && (
         <Alert>
-          This disk needs attention.{" "}
+          <strong>This disk needs attention.</strong>
+          <p>{diskErrorExplanation(d.errorCode)}</p>
           <TechnicalDetails>
             <code>{d.errorCode}</code>
           </TechnicalDetails>
@@ -215,10 +260,20 @@ export function DiskPage() {
           <dd>{bytes(d.sizeBytes)}</dd>
           <dt>Filesystem</dt>
           <dd>{d.filesystemType}</dd>
-          <dt>Currently detected</dt>
-          <dd>{d.observed ? "Yes" : "No"}</dd>
           <dt>Last connected</dt>
           <dd>{date(d.lastConnectedAt)}</dd>
+          <dt>Backup storage</dt>
+          <dd>
+            {repositories.loading ? (
+              "Checking…"
+            ) : storage ? (
+              <Link to={`/repositories/${storage.id}`}>
+                {storage.established ? "Prepared" : "Preparation incomplete"}
+              </Link>
+            ) : (
+              "Not prepared yet"
+            )}
+          </dd>
         </dl>
         <p className="muted small">
           Capacity is observed while connected. “Last connected” is the last
@@ -227,6 +282,9 @@ export function DiskPage() {
       </section>
       <DiskSettings key={d.id} disk={d} onSaved={query.reload} />
       <TechnicalDetails>
+        <p>
+          Permanent identity (filesystem UUID): <code>{d.filesystemUuid}</code>
+        </p>
         <JsonDetails value={d} />
         <h3>Manual mount diagnostics</h3>
         <p>

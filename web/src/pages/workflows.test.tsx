@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CredentialForm, SourceForm } from "./Sources";
+import { DisksPage } from "./Disks";
 import { RunPage } from "./Runs";
 import { RepositoryPage, RepositorySetupPage } from "./Repositories";
 import { DebugPage } from "./Debug";
@@ -246,5 +247,61 @@ describe("backend-owned storage safety", () => {
       screen.getByText("Development diagnostics are disabled."),
     ).toBeVisible();
     expect(useQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe("disk registration guidance", () => {
+  it("explains every refusal in words and keeps the raw code in technical details", () => {
+    vi.mocked(useQuery).mockReturnValue({
+      loading: false,
+      path: "/disks",
+      refreshing: false,
+      reload: vi.fn(),
+      data: {
+        platformAvailable: true,
+        platformReason: "",
+        enumerationError: "",
+        generatedAt: null,
+        disks: [
+          {
+            id: "",
+            name: "",
+            registered: false,
+            filesystemUuid: "",
+            filesystemType: "ext4",
+            sizeBytes: 374251520,
+            supported: true,
+            ambiguous: false,
+            errorCode: "",
+          },
+          {
+            id: "",
+            name: "",
+            registered: false,
+            filesystemUuid: "6a9041f4",
+            filesystemType: "swap",
+            sizeBytes: 3221229568,
+            supported: false,
+            ambiguous: false,
+            errorCode: "",
+          },
+        ],
+      },
+    });
+    render(
+      <MemoryRouter>
+        <DisksPage />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText(/has no UUID/)).toBeVisible();
+    expect(screen.getByText(/cannot use swap/)).toBeVisible();
+    // A refused filesystem never offers a registration control...
+    expect(
+      screen.queryByRole("button", { name: "Register disk" }),
+    ).not.toBeInTheDocument();
+    // ...but the identity an audit would quote is still reachable.
+    expect(screen.getByText("missing")).toBeInTheDocument();
+    expect(screen.getByText("6a9041f4")).toBeInTheDocument();
+    expect(screen.getByText("374 MB")).toBeVisible();
   });
 });
