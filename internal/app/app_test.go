@@ -62,7 +62,16 @@ func TestApplicationServesAndShutsDownGracefully(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("health status = %d, want %d", response.StatusCode, http.StatusOK)
 	}
-	dashboard, err := client.Get("http://" + listener.Addr().String() + "/")
+	spa, err := client.Get("http://" + listener.Addr().String() + "/")
+	if err != nil {
+		t.Fatalf("GET SPA: %v", err)
+	}
+	spaBody, err := io.ReadAll(spa.Body)
+	_ = spa.Body.Close()
+	if err != nil || spa.StatusCode != http.StatusOK || !strings.Contains(string(spaBody), `id="root"`) {
+		t.Fatalf("embedded SPA failed: status=%d error=%v body=%s", spa.StatusCode, err, spaBody)
+	}
+	dashboard, err := client.Get("http://" + listener.Addr().String() + "/legacy/")
 	if err != nil {
 		t.Fatalf("GET dashboard: %v", err)
 	}

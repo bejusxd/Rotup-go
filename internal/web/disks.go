@@ -81,7 +81,7 @@ func (h *handler) registerDisk(response http.ResponseWriter, request *http.Reque
 		h.renderDisks(response, request, http.StatusBadRequest, "", safeError(err))
 		return
 	}
-	http.Redirect(response, request, "/disks", http.StatusSeeOther)
+	http.Redirect(response, request, "/legacy/disks", http.StatusSeeOther)
 }
 
 func (h *handler) updateDisk(response http.ResponseWriter, request *http.Request) {
@@ -97,7 +97,7 @@ func (h *handler) updateDisk(response http.ResponseWriter, request *http.Request
 		h.renderDisks(response, request, http.StatusBadRequest, "", safeError(err))
 		return
 	}
-	http.Redirect(response, request, "/disks", http.StatusSeeOther)
+	http.Redirect(response, request, "/legacy/disks", http.StatusSeeOther)
 }
 
 func (h *handler) mountDisk(response http.ResponseWriter, request *http.Request) {
@@ -126,5 +126,5 @@ func (h *handler) mediaOperation(response http.ResponseWriter, request *http.Req
 		h.renderDisks(response, request, http.StatusBadRequest, "", safeError(err))
 		return
 	}
-	http.Redirect(response, request, "/disks", http.StatusSeeOther)
+	http.Redirect(response, request, "/legacy/disks", http.StatusSeeOther)
 }

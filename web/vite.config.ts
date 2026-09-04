@@ -1,16 +1,17 @@
-import { defineConfig } from 'vitest/config'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: '127.0.0.1',
+    host: "127.0.0.1",
     port: 5173,
     strictPort: true,
     proxy: {
       // Preserve Host + Origin together: the backend's CSRF check stays intact.
-      '/api': { target: 'http://127.0.0.1:8080', changeOrigin: false },
+      "/api": { target: "http://127.0.0.1:8080", changeOrigin: false },
+      "/legacy": { target: "http://127.0.0.1:8080", changeOrigin: false },
     },
   },
-  test: { environment: 'jsdom', setupFiles: './src/test-setup.ts' },
-})
+  test: { environment: "jsdom", setupFiles: "./src/test-setup.ts" },
+});

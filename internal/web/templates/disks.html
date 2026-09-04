@@ -39,17 +39,17 @@
     </td>
     <td>
       {{if eq .Status "AVAILABLE_UNMOUNTED"}}
-      <form class="inline" method="post" action="/disks/{{.Disk.ID}}/mount">
+      <form class="inline" method="post" action="/legacy/disks/{{.Disk.ID}}/mount">
         {{template "csrf" $.CSRFToken}}<button type="submit">Mount and verify</button>
       </form>
       {{end}}
       {{if eq .Status "READY"}}
-      <form class="inline" method="post" action="/disks/{{.Disk.ID}}/unmount">
+      <form class="inline" method="post" action="/legacy/disks/{{.Disk.ID}}/unmount">
         {{template "csrf" $.CSRFToken}}<button type="submit">Sync and unmount</button>
       </form>
       {{end}}
       {{if eq .Status "ERROR"}}
-      <form class="inline" method="post" action="/disks/{{.Disk.ID}}/unmount">
+      <form class="inline" method="post" action="/legacy/disks/{{.Disk.ID}}/unmount">
         {{template "csrf" $.CSRFToken}}<button type="submit">Attempt sync and unmount</button>
       </form>
       {{end}}
@@ -57,7 +57,7 @@
   </tr>
   <tr>
     <td colspan="7">
-      <form method="post" action="/disks/{{.Disk.ID}}">
+      <form method="post" action="/legacy/disks/{{.Disk.ID}}">
         {{template "csrf" $.CSRFToken}}
         <label>Name<input type="text" name="name" value="{{.Disk.Name}}" required></label>
         <label><input type="checkbox" name="enabled" value="1"{{if .Disk.Enabled}} checked{{end}}> Enabled</label>
@@ -91,7 +91,7 @@
       {{else if not .Supported}}
         <span class="muted">{{.Observed.FilesystemType}} is not a filesystem ROTUP manages</span>
       {{else}}
-      <form method="post" action="/disks/register">
+      <form method="post" action="/legacy/disks/register">
         {{template "csrf" $.CSRFToken}}
         <input type="hidden" name="filesystem_uuid" value="{{.Observed.FilesystemUUID}}">
         <label>Name for this disk<input type="text" name="name" required></label>

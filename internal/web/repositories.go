@@ -197,7 +197,7 @@ func (h *handler) repositorySetup(response http.ResponseWriter, request *http.Re
 		h.renderRepositories(response, request, http.StatusBadRequest, "", safeError(err))
 		return
 	}
-	http.Redirect(response, request, "/runs/"+runID, http.StatusSeeOther)
+	http.Redirect(response, request, "/legacy/runs/"+runID, http.StatusSeeOther)
 }
 
 func (h *handler) startBackup(response http.ResponseWriter, request *http.Request) {
@@ -212,7 +212,7 @@ func (h *handler) startBackup(response http.ResponseWriter, request *http.Reques
 		h.renderRepository(response, request, repositoryID, http.StatusBadRequest, "", safeError(err))
 		return
 	}
-	http.Redirect(response, request, "/runs/"+runID, http.StatusSeeOther)
+	http.Redirect(response, request, "/legacy/runs/"+runID, http.StatusSeeOther)
 }
 
 func (h *handler) recoverRepository(response http.ResponseWriter, request *http.Request) {
@@ -226,7 +226,7 @@ func (h *handler) recoverRepository(response http.ResponseWriter, request *http.
 		h.renderRepository(response, request, repositoryID, http.StatusBadRequest, "", safeError(err))
 		return
 	}
-	http.Redirect(response, request, "/runs/"+runID, http.StatusSeeOther)
+	http.Redirect(response, request, "/legacy/runs/"+runID, http.StatusSeeOther)
 }
 
 // repositoryAge renders how long ago a repository was last backed up.

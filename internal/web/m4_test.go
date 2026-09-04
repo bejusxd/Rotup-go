@@ -173,7 +173,7 @@ func newBackupServer(t *testing.T, backups *fakeBackups, media *fakeMedia) *test
 		t.Fatalf("new handler: %v", err)
 	}
 	server.handler = handler
-	server.token = server.fetchToken(t, "/sources/new")
+	server.token = server.fetchToken(t, "/legacy/sources/new")
 	return server
 }
 
@@ -185,7 +185,7 @@ func TestRepositoriesPageShowsIdentityAndHealth(t *testing.T) {
 	}}
 	server := newBackupServer(t, backups, nil)
 
-	response := server.get(t, "/repositories")
+	response := server.get(t, "/legacy/repositories")
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
@@ -222,11 +222,11 @@ func TestRepositoriesPageOffersSetupForUnclaimedDisk(t *testing.T) {
 	}}
 	server := newBackupServer(t, &fakeBackups{}, media)
 
-	body := server.get(t, "/repositories").Body.String()
-	if !strings.Contains(body, "/disks/"+testDiskID+"/repository/init") {
+	body := server.get(t, "/legacy/repositories").Body.String()
+	if !strings.Contains(body, "/legacy/disks/"+testDiskID+"/repository/init") {
 		t.Fatal("the page does not offer initializing a repository on the registered disk")
 	}
-	if !strings.Contains(body, "/disks/"+testDiskID+"/repository/adopt") {
+	if !strings.Contains(body, "/legacy/disks/"+testDiskID+"/repository/adopt") {
 		t.Fatal("the page does not offer adopting an existing repository")
 	}
 	if strings.Contains(body, "/dev/sdc1") {
@@ -251,7 +251,7 @@ func TestFailedSetupStillOffersExplicitAdoption(t *testing.T) {
 		Disk:       testDisk(), Connected: true,
 	}}}
 	server := newBackupServer(t, backups, media)
-	if body := server.get(t, "/repositories").Body.String(); !strings.Contains(body, "/disks/"+testDiskID+"/repository/adopt") {
+	if body := server.get(t, "/legacy/repositories").Body.String(); !strings.Contains(body, "/legacy/disks/"+testDiskID+"/repository/adopt") {
 		t.Fatal("an interrupted setup stranded its repository with no explicit adoption action")
 	}
 }
@@ -262,14 +262,14 @@ func TestRepositoryInitializationPostsPasswordAndEscrow(t *testing.T) {
 	backups := &fakeBackups{}
 	server := newBackupServer(t, backups, nil)
 
-	response := server.post(t, "/disks/"+testDiskID+"/repository/init", url.Values{
+	response := server.post(t, "/legacy/disks/"+testDiskID+"/repository/init", url.Values{
 		"repository_password": {uiRepositoryPassword},
 		"escrow_acknowledged": {"1"},
 	}, true)
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want a redirect to the run page", response.Code)
 	}
-	if location := response.Header().Get("Location"); location != "/runs/run-setup" {
+	if location := response.Header().Get("Location"); location != "/legacy/runs/run-setup" {
 		t.Fatalf("redirect = %q", location)
 	}
 	if len(backups.setups) != 1 {
@@ -294,7 +294,7 @@ func TestRepositoryAdoptionUsesAdoptMode(t *testing.T) {
 	backups := &fakeBackups{}
 	server := newBackupServer(t, backups, nil)
 
-	server.post(t, "/disks/"+testDiskID+"/repository/adopt", url.Values{
+	server.post(t, "/legacy/disks/"+testDiskID+"/repository/adopt", url.Values{
 		"repository_password": {uiRepositoryPassword},
 		"escrow_acknowledged": {"1"},
 	}, true)
@@ -309,7 +309,7 @@ func TestRepositorySetupRequiresCSRFToken(t *testing.T) {
 	backups := &fakeBackups{}
 	server := newBackupServer(t, backups, nil)
 
-	response := server.post(t, "/disks/"+testDiskID+"/repository/init", url.Values{
+	response := server.post(t, "/legacy/disks/"+testDiskID+"/repository/init", url.Values{
 		"repository_password": {uiRepositoryPassword},
 		"escrow_acknowledged": {"1"},
 	}, false)
@@ -330,13 +330,13 @@ func TestManualBackupPostsSelectedSources(t *testing.T) {
 	}
 	server := newBackupServer(t, backups, nil)
 
-	response := server.post(t, "/repositories/"+testRepositoryID+"/backup", url.Values{
+	response := server.post(t, "/legacy/repositories/"+testRepositoryID+"/backup", url.Values{
 		"source_id": {testSourceID},
 	}, true)
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d", response.Code)
 	}
-	if location := response.Header().Get("Location"); location != "/runs/run-backup" {
+	if location := response.Header().Get("Location"); location != "/legacy/runs/run-backup" {
 		t.Fatalf("redirect = %q", location)
 	}
 	if len(backups.backups) != 1 {
@@ -360,7 +360,7 @@ func TestManualBackupRequiresCSRFToken(t *testing.T) {
 	}
 	server := newBackupServer(t, backups, nil)
 
-	response := server.post(t, "/repositories/"+testRepositoryID+"/backup",
+	response := server.post(t, "/legacy/repositories/"+testRepositoryID+"/backup",
 		url.Values{"source_id": {testSourceID}}, false)
 	if response.Code == http.StatusSeeOther {
 		t.Fatal("a backup started without a form token")
@@ -380,14 +380,14 @@ func TestSuspectRepositoryPageRefusesBackupAndOffersRecovery(t *testing.T) {
 	}
 	server := newBackupServer(t, backups, nil)
 
-	body := server.get(t, "/repositories/"+testRepositoryID).Body.String()
+	body := server.get(t, "/legacy/repositories/"+testRepositoryID).Body.String()
 	if strings.Contains(body, "Start backup") {
 		t.Fatal("a suspect repository offered a backup")
 	}
 	if !strings.Contains(body, "SUSPECT") {
 		t.Fatal("the page does not state that the repository is suspect")
 	}
-	if !strings.Contains(body, "/repositories/"+testRepositoryID+"/recover") {
+	if !strings.Contains(body, "/legacy/repositories/"+testRepositoryID+"/recover") {
 		t.Fatal("the page does not offer a recovery")
 	}
 }
@@ -401,7 +401,7 @@ func TestRepositoryPageExplainsIneligibleSource(t *testing.T) {
 	}
 	server := newBackupServer(t, backups, nil)
 
-	body := server.get(t, "/repositories/"+testRepositoryID).Body.String()
+	body := server.get(t, "/legacy/repositories/"+testRepositoryID).Body.String()
 	if !strings.Contains(body, "needs recovery") {
 		t.Fatal("the page does not explain why a source cannot be backed up")
 	}
@@ -418,7 +418,7 @@ func TestRepositoryRecoveryPosts(t *testing.T) {
 	}
 	server := newBackupServer(t, backups, nil)
 
-	response := server.post(t, "/repositories/"+testRepositoryID+"/recover", url.Values{}, true)
+	response := server.post(t, "/legacy/repositories/"+testRepositoryID+"/recover", url.Values{}, true)
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d", response.Code)
 	}
@@ -438,7 +438,7 @@ func TestRepositoryPagesNeverRenderAPassword(t *testing.T) {
 	}
 	server := newBackupServer(t, backups, nil)
 
-	for _, path := range []string{"/repositories", "/repositories/" + testRepositoryID} {
+	for _, path := range []string{"/legacy/repositories", "/legacy/repositories/" + testRepositoryID} {
 		body := server.get(t, path).Body.String()
 		if strings.Contains(body, uiRepositoryPassword) {
 			t.Fatalf("%s rendered a repository password", path)
@@ -482,10 +482,10 @@ func TestBackupHistoryShowsDurabilityAndSnapshot(t *testing.T) {
 	}
 	server := newBackupServer(t, backups, nil)
 
-	body := server.get(t, "/repositories/"+testRepositoryID).Body.String()
+	body := server.get(t, "/legacy/repositories/"+testRepositoryID).Body.String()
 	for _, fragment := range []string{
 		"DURABLE_SUCCESS", "SNAPSHOT_CREATED", testSnapshot[:8], "unverified",
-		"/runs/run-1", "/runs/run-2",
+		"/legacy/runs/run-1", "/legacy/runs/run-2",
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Fatalf("the backup history does not contain %q", fragment)
@@ -498,7 +498,7 @@ func TestUnknownRepositoryIsRefused(t *testing.T) {
 	t.Parallel()
 
 	server := newBackupServer(t, &fakeBackups{}, nil)
-	response := server.get(t, "/repositories/"+testRepositoryID)
+	response := server.get(t, "/legacy/repositories/"+testRepositoryID)
 	if response.Code == http.StatusOK {
 		t.Fatalf("an unknown repository rendered with status %d", response.Code)
 	}
@@ -514,7 +514,7 @@ func TestExistingRoutesStillRespondWithBackupsWired(t *testing.T) {
 	media := &fakeMedia{available: true, snapshot: removable.Snapshot{PlatformAvailable: true}}
 	server := newBackupServer(t, backups, media)
 
-	for _, path := range []string{"/", "/healthz", "/sources", "/runs", "/disks", "/repositories"} {
+	for _, path := range []string{"/", "/healthz", "/legacy/sources", "/legacy/runs", "/legacy/disks", "/legacy/repositories"} {
 		response := server.get(t, path)
 		if response.Code != http.StatusOK {
 			t.Fatalf("%s returned %d", path, response.Code)
@@ -532,7 +532,7 @@ func TestDashboardReportsBothEngines(t *testing.T) {
 	}}
 	server := newBackupServer(t, backups, nil)
 
-	body := server.get(t, "/").Body.String()
+	body := server.get(t, "/legacy/").Body.String()
 	for _, fragment := range []string{"rclone", "restic", "0.17.3"} {
 		if !strings.Contains(body, fragment) {
 			t.Fatalf("the dashboard does not report %q", fragment)

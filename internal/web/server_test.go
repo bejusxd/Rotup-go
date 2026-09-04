@@ -79,7 +79,7 @@ func TestDashboardShowsLatestFakeRun(t *testing.T) {
 			FinishedAt: time.Date(2026, time.September, 3, 8, 0, 0, 0, time.UTC),
 		},
 	})
-	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request := httptest.NewRequest(http.MethodGet, "/legacy/", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 

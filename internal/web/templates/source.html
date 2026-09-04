@@ -13,13 +13,13 @@
 {{end}}
 
 <h2>Actions</h2>
-<form class="inline" method="post" action="/sources/{{.Source.ID}}/test">
+<form class="inline" method="post" action="/legacy/sources/{{.Source.ID}}/test">
   {{template "csrf" $.CSRFToken}}<button type="submit">Test connection</button>
 </form>
-<form class="inline" method="post" action="/sources/{{.Source.ID}}/collect">
+<form class="inline" method="post" action="/legacy/sources/{{.Source.ID}}/collect">
   {{template "csrf" $.CSRFToken}}<button type="submit">Collect now</button>
 </form>
-<a href="/sources/{{.Source.ID}}/staging">Inspect staging</a>
+<a href="/legacy/sources/{{.Source.ID}}/staging">Inspect staging</a>
 
 <h2>Credential</h2>
 {{if .HasCredential}}
@@ -27,13 +27,13 @@
 {{else}}
 <p class="muted">No password is stored for this source.</p>
 {{end}}
-<form method="post" action="/sources/{{.Source.ID}}/credential">
+<form method="post" action="/legacy/sources/{{.Source.ID}}/credential">
   {{template "csrf" $.CSRFToken}}
   <label>{{if .HasCredential}}Replace password{{else}}Set password{{end}}<input type="password" name="password" autocomplete="new-password" required></label>
   <button type="submit">Save password</button>
 </form>
 {{if .HasCredential}}
-<form method="post" action="/sources/{{.Source.ID}}/credential/clear">
+<form method="post" action="/legacy/sources/{{.Source.ID}}/credential/clear">
   {{template "csrf" $.CSRFToken}}<button type="submit">Clear stored password</button>
 </form>
 {{end}}
@@ -66,7 +66,7 @@
     <td>{{.ItemCount}}</td>
     <td>{{bytes .ByteCount}}</td>
     <td>{{if .ReconciliationCompleted}}<span class="ok">yes</span>{{else}}<span class="bad">no &mdash; this batch may be incomplete</span>{{end}}</td>
-    <td><a href="/runs/{{.CollectionRunID}}">run</a></td>
+    <td><a href="/legacy/runs/{{.CollectionRunID}}">run</a></td>
   </tr>
   {{end}}
 </table>
@@ -80,7 +80,7 @@
   <tr><th>Requested</th><th>Kind</th><th>Status</th><th>Summary</th></tr>
   {{range .Runs}}
   <tr>
-    <td><a href="/runs/{{.ID}}">{{timestamp .RequestedAt}}</a></td>
+    <td><a href="/legacy/runs/{{.ID}}">{{timestamp .RequestedAt}}</a></td>
     <td>{{.Kind}}</td>
     <td>{{template "run_status" .}}</td>
     <td>{{.Summary}}</td>
@@ -92,7 +92,7 @@
 {{end}}
 
 <h2>Settings</h2>
-<form method="post" action="/sources/{{.Source.ID}}">
+<form method="post" action="/legacy/sources/{{.Source.ID}}">
   {{template "csrf" $.CSRFToken}}
   {{template "source_fields" .Form}}
   <button type="submit">Save settings</button>

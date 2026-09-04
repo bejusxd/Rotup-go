@@ -24,7 +24,7 @@
   <tr><th>Disk</th><th>Health</th><th>Last snapshot</th><th>Last successful backup</th></tr>
   {{range .Repositories}}
   <tr>
-    <td><a href="/repositories/{{.Repository.ID}}">{{if .Disk}}{{.Disk.Name}}{{else}}{{.Repository.ID}}{{end}}</a>
+    <td><a href="/legacy/repositories/{{.Repository.ID}}">{{if .Disk}}{{.Disk.Name}}{{else}}{{.Repository.ID}}{{end}}</a>
         {{if not .Connected}}<span class="muted">(not connected)</span>{{end}}</td>
     <td><span class="{{repositoryClass .Repository.Health}}">{{.Repository.Health}}</span></td>
     <td class="mono">{{if .Repository.LastSnapshotID}}{{shortID .Repository.LastSnapshotID}}{{else}}&mdash;{{end}}</td>
@@ -39,7 +39,7 @@
   <p><strong>{{.Kind}}</strong> — {{template "run_status" .}}</p>
   <p>{{.Summary}}</p>
   <p>Finished: {{timestamp .FinishedAt}}</p>
-  <p><a href="/runs/{{.ID}}">Run detail</a></p>
+  <p><a href="/legacy/runs/{{.ID}}">Run detail</a></p>
 {{else}}
   <p>No runs recorded.</p>
 {{end}}
@@ -50,7 +50,7 @@
   <tr><th>Name</th><th>Staging state</th><th>Version</th><th>Last collection</th></tr>
   {{range .Sources}}
   <tr>
-    <td><a href="/sources/{{.Source.ID}}">{{.Source.Name}}</a></td>
+    <td><a href="/legacy/sources/{{.Source.ID}}">{{.Source.Name}}</a></td>
     <td><span class="{{stagingClass .Source.StagingStatus}}">{{.Source.StagingStatus}}</span></td>
     <td>{{.Source.StagingStateVersion}}</td>
     <td>{{if .LastRun}}{{template "run_status" .LastRun}} {{timestamp .LastRun.FinishedAt}}{{else}}—{{end}}</td>
@@ -58,7 +58,7 @@
   {{end}}
 </table>
 {{else}}
-<p>No sources configured. <a href="/sources/new">Add one</a>.</p>
+<p>No sources configured. <a href="/legacy/sources/new">Add one</a>.</p>
 {{end}}
 {{end}}
 {{template "layout_bottom" .}}

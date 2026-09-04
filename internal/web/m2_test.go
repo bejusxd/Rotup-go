@@ -206,7 +206,7 @@ func newTestServer(t *testing.T) *testServer {
 		t.Fatalf("new handler: %v", err)
 	}
 	server := &testServer{handler: handler, backend: backend, layout: layout}
-	server.token = server.fetchToken(t, "/sources/new")
+	server.token = server.fetchToken(t, "/legacy/sources/new")
 	return server
 }
 
@@ -276,7 +276,7 @@ func TestSourceListRendersConfiguredSources(t *testing.T) {
 		Status: domain.RunStatusSucceeded, FinishedAt: time.Now().UTC(),
 	}}
 
-	response := server.get(t, "/sources")
+	response := server.get(t, "/legacy/sources")
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
@@ -292,7 +292,7 @@ func TestCreateSourceRequiresAFormToken(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t)
-	response := server.post(t, "/sources", validSourceForm(), false)
+	response := server.post(t, "/legacy/sources", validSourceForm(), false)
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 for a request with no form token", response.Code)
@@ -308,7 +308,7 @@ func TestCreateSourceRejectsAnotherOrigin(t *testing.T) {
 	server := newTestServer(t)
 	form := validSourceForm()
 	form.Set(csrfFieldName, server.token)
-	request := httptest.NewRequest(http.MethodPost, "/sources", strings.NewReader(form.Encode()))
+	request := httptest.NewRequest(http.MethodPost, "/legacy/sources", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("Origin", "http://evil.example")
 	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: server.token})
@@ -327,12 +327,12 @@ func TestCreateSourceSucceedsAndRedirects(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t)
-	response := server.post(t, "/sources", validSourceForm(), true)
+	response := server.post(t, "/legacy/sources", validSourceForm(), true)
 
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want a post-redirect-get response", response.Code)
 	}
-	if location := response.Header().Get("Location"); location != "/sources/created-id" {
+	if location := response.Header().Get("Location"); location != "/legacy/sources/created-id" {
 		t.Fatalf("redirect location = %q", location)
 	}
 	if len(server.backend.created) != 1 {
@@ -354,7 +354,7 @@ func TestCreateSourceRendersValidationErrors(t *testing.T) {
 	server.backend.createErr = domain.NewError(domain.ErrClassConfiguration, "staging_overlap",
 		"staging destination \"documents\" overlaps another source")
 
-	response := server.post(t, "/sources", validSourceForm(), true)
+	response := server.post(t, "/legacy/sources", validSourceForm(), true)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", response.Code)
 	}
@@ -378,7 +378,7 @@ func TestSourcePageNeverShowsAStoredPassword(t *testing.T) {
 		Purpose: domain.SecretPurposeSMBPassword,
 	}
 
-	response := server.get(t, "/sources/"+testSourceID)
+	response := server.get(t, "/legacy/sources/"+testSourceID)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
@@ -401,7 +401,7 @@ func TestReplaceAndClearCredentialAreExplicitActions(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t)
-	response := server.post(t, "/sources/"+testSourceID+"/credential",
+	response := server.post(t, "/legacy/sources/"+testSourceID+"/credential",
 		url.Values{"password": {"hunter2"}}, true)
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want a redirect after storing a password", response.Code)
@@ -417,7 +417,7 @@ func TestReplaceAndClearCredentialAreExplicitActions(t *testing.T) {
 		t.Fatal("the redirect must not carry the password")
 	}
 
-	response = server.post(t, "/sources/"+testSourceID+"/credential/clear", url.Values{}, true)
+	response = server.post(t, "/legacy/sources/"+testSourceID+"/credential/clear", url.Values{}, true)
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want a redirect after clearing", response.Code)
 	}
@@ -426,11 +426,11 @@ func TestReplaceAndClearCredentialAreExplicitActions(t *testing.T) {
 	}
 
 	// Both actions are protected.
-	if code := server.post(t, "/sources/"+testSourceID+"/credential",
+	if code := server.post(t, "/legacy/sources/"+testSourceID+"/credential",
 		url.Values{"password": {"x"}}, false).Code; code != http.StatusBadRequest {
 		t.Fatalf("an unprotected credential replacement returned %d", code)
 	}
-	if code := server.post(t, "/sources/"+testSourceID+"/credential/clear",
+	if code := server.post(t, "/legacy/sources/"+testSourceID+"/credential/clear",
 		url.Values{}, false).Code; code != http.StatusBadRequest {
 		t.Fatalf("an unprotected credential clear returned %d", code)
 	}
@@ -441,22 +441,22 @@ func TestManualRunsAreTriggeredAndRedirectToTheirRun(t *testing.T) {
 
 	server := newTestServer(t)
 
-	response := server.post(t, "/sources/"+testSourceID+"/test", url.Values{}, true)
+	response := server.post(t, "/legacy/sources/"+testSourceID+"/test", url.Values{}, true)
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d", response.Code)
 	}
-	if response.Header().Get("Location") != "/runs/test-run-id" {
+	if response.Header().Get("Location") != "/legacy/runs/test-run-id" {
 		t.Fatalf("redirect = %q", response.Header().Get("Location"))
 	}
 	if len(server.backend.startedTests) != 1 {
 		t.Fatal("the connection test was not started")
 	}
 
-	response = server.post(t, "/sources/"+testSourceID+"/collect", url.Values{}, true)
+	response = server.post(t, "/legacy/sources/"+testSourceID+"/collect", url.Values{}, true)
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d", response.Code)
 	}
-	if response.Header().Get("Location") != "/runs/collection-run-id" {
+	if response.Header().Get("Location") != "/legacy/runs/collection-run-id" {
 		t.Fatalf("redirect = %q", response.Header().Get("Location"))
 	}
 	if len(server.backend.startedRuns) != 1 {
@@ -464,7 +464,7 @@ func TestManualRunsAreTriggeredAndRedirectToTheirRun(t *testing.T) {
 	}
 
 	// Neither action may be triggered without a form token.
-	if code := server.post(t, "/sources/"+testSourceID+"/collect", url.Values{}, false).Code; code != http.StatusBadRequest {
+	if code := server.post(t, "/legacy/sources/"+testSourceID+"/collect", url.Values{}, false).Code; code != http.StatusBadRequest {
 		t.Fatalf("an unprotected collection trigger returned %d", code)
 	}
 	if len(server.backend.startedRuns) != 1 {
@@ -488,7 +488,7 @@ func TestRunPagePollsWhileRunningAndStopsWhenTerminal(t *testing.T) {
 		Warnings: []string{"one file was skipped"},
 	}
 
-	running := server.get(t, "/runs/run-running")
+	running := server.get(t, "/legacy/runs/run-running")
 	if !strings.Contains(running.Body.String(), `http-equiv="refresh"`) {
 		t.Fatal("a running run must refresh its page")
 	}
@@ -496,7 +496,7 @@ func TestRunPagePollsWhileRunningAndStopsWhenTerminal(t *testing.T) {
 		t.Fatal("the page should explain that the run is independent of the browser")
 	}
 
-	done := server.get(t, "/runs/run-done")
+	done := server.get(t, "/legacy/runs/run-done")
 	body := done.Body.String()
 	if strings.Contains(body, `http-equiv="refresh"`) {
 		t.Fatal("a finished run must not keep refreshing")
@@ -507,7 +507,7 @@ func TestRunPagePollsWhileRunningAndStopsWhenTerminal(t *testing.T) {
 		}
 	}
 
-	if server.get(t, "/runs/does-not-exist").Code != http.StatusNotFound {
+	if server.get(t, "/legacy/runs/does-not-exist").Code != http.StatusNotFound {
 		t.Fatal("an unknown run must be a 404")
 	}
 }
@@ -527,7 +527,7 @@ func TestHistoryPageListsRuns(t *testing.T) {
 		PayloadJSON: `{"staged_files":2}`,
 	}}
 
-	response := server.get(t, "/runs")
+	response := server.get(t, "/legacy/runs")
 	body := response.Body.String()
 	for _, fragment := range []string{"CONNECTION_TEST", "COLLECTION", "reachable", "did not answer",
 		"collection.blocked_empty_source", "staged_files"} {
@@ -553,7 +553,7 @@ func TestStagingBrowserIsReadOnlyAndConfined(t *testing.T) {
 		t.Fatalf("write staged file: %v", err)
 	}
 
-	response := server.get(t, "/sources/"+testSourceID+"/staging")
+	response := server.get(t, "/legacy/sources/"+testSourceID+"/staging")
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
@@ -568,16 +568,16 @@ func TestStagingBrowserIsReadOnlyAndConfined(t *testing.T) {
 	// The query value is passed raw so that percent-encoded traversal is
 	// decoded by the URL parser exactly as a browser would send it.
 	for _, escape := range []string{"..", "../..", "%2e%2e%2f", "%2E%2E%2Fescape", "/etc"} {
-		code := server.get(t, "/sources/"+testSourceID+"/staging?path="+escape).Code
+		code := server.get(t, "/legacy/sources/"+testSourceID+"/staging?path="+escape).Code
 		if code == http.StatusOK {
 			t.Fatalf("staging path %q was accepted", escape)
 		}
 	}
 
-	if code := server.get(t, "/sources/"+testSourceID+"/staging?area=revisions").Code; code != http.StatusOK {
+	if code := server.get(t, "/legacy/sources/"+testSourceID+"/staging?area=revisions").Code; code != http.StatusOK {
 		t.Fatalf("the revisions area returned %d", code)
 	}
-	if server.get(t, "/sources/does-not-exist/staging").Code != http.StatusNotFound {
+	if server.get(t, "/legacy/sources/does-not-exist/staging").Code != http.StatusNotFound {
 		t.Fatal("an unknown source must be a 404")
 	}
 }
@@ -586,7 +586,7 @@ func TestDashboardShowsSourcesAndEngineStatus(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t)
-	response := server.get(t, "/")
+	response := server.get(t, "/legacy/")
 	body := response.Body.String()
 
 	for _, fragment := range []string{"ROTUP", "Application status: running", "Database status: ok",
@@ -614,7 +614,7 @@ func TestResponsesCarrySecurityHeaders(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t)
-	for _, path := range []string{"/", "/healthz", "/sources"} {
+	for _, path := range []string{"/", "/healthz", "/legacy/sources"} {
 		response := server.get(t, path)
 		policy := response.Header().Get("Content-Security-Policy")
 		if !strings.Contains(policy, "default-src 'none'") || !strings.Contains(policy, "frame-ancestors 'none'") {
@@ -636,7 +636,7 @@ func TestUntrustedTextIsEscaped(t *testing.T) {
 		Status: domain.RunStatusFailed, Summary: `<img src=x onerror=alert(1)>`,
 	}}
 
-	for _, path := range []string{"/sources", "/runs", "/runs/run-1"} {
+	for _, path := range []string{"/legacy/sources", "/legacy/runs", "/legacy/runs/run-1"} {
 		body := server.get(t, path).Body.String()
 		if strings.Contains(body, "<script>alert(1)</script>") {
 			t.Fatalf("%s rendered unescaped markup", path)
@@ -652,12 +652,12 @@ func TestUpdateSourceSubmitsSettings(t *testing.T) {
 
 	server := newTestServer(t)
 	// The edit form lives on the source page, so its token comes from there.
-	server.token = server.fetchToken(t, "/sources/"+testSourceID)
+	server.token = server.fetchToken(t, "/legacy/sources/"+testSourceID)
 
 	form := validSourceForm()
 	form.Set("name", "renamed")
 	form.Del("enabled")
-	response := server.post(t, "/sources/"+testSourceID, form, true)
+	response := server.post(t, "/legacy/sources/"+testSourceID, form, true)
 
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -676,7 +676,7 @@ func TestSourcePageWarnsWhenRecoveryIsRequired(t *testing.T) {
 	server := newTestServer(t)
 	server.backend.sources[0].StagingStatus = domain.StagingRecoveryRequired
 
-	body := server.get(t, "/sources/"+testSourceID).Body.String()
+	body := server.get(t, "/legacy/sources/"+testSourceID).Body.String()
 	if !strings.Contains(body, "RECOVERY_REQUIRED") {
 		t.Fatal("the staging state must be shown")
 	}
@@ -695,7 +695,7 @@ func TestRevisionBatchCompletionIsShown(t *testing.T) {
 			ReconciliationCompleted: false, CreatedAt: time.Now().UTC()},
 	}
 
-	body := server.get(t, "/sources/"+testSourceID).Body.String()
+	body := server.get(t, "/legacy/sources/"+testSourceID).Body.String()
 	if !strings.Contains(body, "revisions/x/y") {
 		t.Fatal("the revision batch is not listed")
 	}

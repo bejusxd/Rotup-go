@@ -39,7 +39,7 @@
     </td>
     <td class="mono">{{if .Repository.LastSnapshotID}}{{shortID .Repository.LastSnapshotID}}{{else}}&mdash;{{end}}</td>
     <td>{{if .Repository.LastSuccessfulBackupAt}}{{timestamp .Repository.LastSuccessfulBackupAt.UTC}}{{else}}&mdash;{{end}}</td>
-    <td><a href="/repositories/{{.Repository.ID}}">Open</a></td>
+    <td><a href="/legacy/repositories/{{.Repository.ID}}">Open</a></td>
   </tr>
   {{end}}
 </table>
@@ -63,7 +63,7 @@
 <p class="muted">This disk is currently {{.Status}}. A repository can be established when it is
   connected and idle.</p>
 {{else}}
-<form method="post" action="/disks/{{.Disk.ID}}/repository/init">
+<form method="post" action="/legacy/disks/{{.Disk.ID}}/repository/init">
   {{template "csrf" $.CSRFToken}}
   <label>Repository password
     <input type="password" name="repository_password" autocomplete="new-password" required
@@ -79,7 +79,7 @@
     I have recorded this repository password outside this host.</label>
   <button type="submit">Initialize a new repository</button>
 </form>
-<form method="post" action="/disks/{{.Disk.ID}}/repository/adopt">
+<form method="post" action="/legacy/disks/{{.Disk.ID}}/repository/adopt">
   {{template "csrf" $.CSRFToken}}
   <p class="muted">
     If this disk already carries a ROTUP restic repository, adopt it instead. Adoption

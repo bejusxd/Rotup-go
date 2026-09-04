@@ -6,7 +6,7 @@
   <tr><th>Run ID</th><td class="mono">{{.Run.ID}}</td></tr>
   <tr><th>Status</th><td>{{template "run_status" .Run}}</td></tr>
   <tr><th>Trigger</th><td>{{.Run.TriggerKind}}</td></tr>
-  <tr><th>Source</th><td>{{if .Source}}<a href="/sources/{{.Source.ID}}">{{.Source.Name}}</a>{{else}}&mdash;{{end}}</td></tr>
+  <tr><th>Source</th><td>{{if .Source}}<a href="/legacy/sources/{{.Source.ID}}">{{.Source.Name}}</a>{{else}}&mdash;{{end}}</td></tr>
   <tr><th>Requested</th><td>{{timestamp .Run.RequestedAt}}</td></tr>
   <tr><th>Started</th><td>{{timestamp .Run.StartedAt}}</td></tr>
   <tr><th>Finished</th><td>{{timestamp .Run.FinishedAt}}</td></tr>
@@ -37,7 +37,7 @@
 <h2>Backup</h2>
 <table>
   <tr><th>Repository</th>
-      <td>{{if $.Body.Repository}}<a href="/repositories/{{$.Body.Repository.ID}}">{{$.Body.Repository.ID}}</a>{{else}}{{.RepositoryID}}{{end}}</td></tr>
+      <td>{{if $.Body.Repository}}<a href="/legacy/repositories/{{$.Body.Repository.ID}}">{{$.Body.Repository.ID}}</a>{{else}}{{.RepositoryID}}{{end}}</td></tr>
   <tr><th>Registered disk</th><td class="mono">{{.DiskID}}</td></tr>
   <tr><th>Filesystem UUID</th>
       <td class="mono">{{if $.Body.Repository}}{{$.Body.Repository.FilesystemUUID}}{{else}}&mdash;{{end}}</td></tr>

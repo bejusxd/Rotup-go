@@ -165,3 +165,26 @@ finish browser checks (including nested-route refresh and failures), and run the
 full Linux regression/build suite again. No real disk setup/backup/recovery was
 performed during UI development; these operations are covered by existing backend
 tests and new facade delegation tests.
+
+## Checkpoint 5: single-binary SPA and legacy transition
+
+`web/assets.go` embeds the checked-in `web/dist` build; `internal/web/spa.go`
+serves the entry point for client routes and hashed assets with immutable caching.
+The entry point revalidates; missing assets return 404. API paths and `/healthz`
+remain Go routes and never fall through to the SPA. The production CSP permits
+only same-origin scripts/connections (no inline scripts/eval); legacy inline CSS
+is retained. No Node process is needed to run the built daemon.
+
+The complete old HTML interface is at `/legacy/`, including staging inspection,
+events, revision coverage and all original forms. Its links/actions/redirects were
+prefix-adjusted, not removed. Existing tests were updated only to use `/legacy`
+URLs, retaining their behavior assertions. Added embedded-asset, route-refresh,
+API isolation, method, CSP and legacy-link regressions. The application lifecycle
+test checks both the SPA entry and the legacy persisted-demo dashboard.
+
+Linux `go test ./...`, `go vet ./...`, and builds of `rotupd` and
+`rotup-mounthelper` passed. Helper builds use `.cache/ui/rotup-mounthelper` to
+preserve the repository's tracked prebuilt helper. Frontend build/typecheck and
+13 tests passed. Source files were formatted for readable future maintenance.
+The production bundle was started as the normal WSL user, using the existing
+database and helper wrapper, with `ROTUP_DEV_MODE=false` for browser validation.

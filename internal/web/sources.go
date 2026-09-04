@@ -101,7 +101,7 @@ func (h *handler) createSource(response http.ResponseWriter, request *http.Reque
 		h.renderWithMessages(response, request, http.StatusBadRequest, "source_form", form, "", safeError(err))
 		return
 	}
-	http.Redirect(response, request, "/sources/"+id, http.StatusSeeOther)
+	http.Redirect(response, request, "/legacy/sources/"+id, http.StatusSeeOther)
 }
 
 func (h *handler) updateSource(response http.ResponseWriter, request *http.Request) {
@@ -116,7 +116,7 @@ func (h *handler) updateSource(response http.ResponseWriter, request *http.Reque
 		h.renderDetailWithForm(response, request, id, form, http.StatusBadRequest, "", safeError(err))
 		return
 	}
-	http.Redirect(response, request, "/sources/"+id, http.StatusSeeOther)
+	http.Redirect(response, request, "/legacy/sources/"+id, http.StatusSeeOther)
 }
 
 func (h *handler) showSource(response http.ResponseWriter, request *http.Request) {
@@ -260,7 +260,7 @@ func (h *handler) replaceCredential(response http.ResponseWriter, request *http.
 		return
 	}
 	// Post-redirect-get: the password must not survive in a resubmittable form.
-	http.Redirect(response, request, "/sources/"+id, http.StatusSeeOther)
+	http.Redirect(response, request, "/legacy/sources/"+id, http.StatusSeeOther)
 }
 
 func (h *handler) clearCredential(response http.ResponseWriter, request *http.Request) {
@@ -273,7 +273,7 @@ func (h *handler) clearCredential(response http.ResponseWriter, request *http.Re
 		h.renderDetailWithForm(response, request, id, sourceFormData{}, http.StatusBadRequest, "", safeError(err))
 		return
 	}
-	http.Redirect(response, request, "/sources/"+id, http.StatusSeeOther)
+	http.Redirect(response, request, "/legacy/sources/"+id, http.StatusSeeOther)
 }
 
 func (h *handler) startConnectionTest(response http.ResponseWriter, request *http.Request) {
@@ -300,7 +300,7 @@ func (h *handler) startRun(response http.ResponseWriter, request *http.Request,
 		h.renderDetailWithForm(response, request, id, sourceFormData{}, http.StatusBadRequest, "", safeError(err))
 		return
 	}
-	http.Redirect(response, request, "/runs/"+runID, http.StatusSeeOther)
+	http.Redirect(response, request, "/legacy/runs/"+runID, http.StatusSeeOther)
 }
 
 func (h *handler) checkMutation(request *http.Request) string {

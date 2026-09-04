@@ -2,13 +2,13 @@
 {{with .Body}}
 <h1>Staging &mdash; {{.Source.Name}}</h1>
 <p>
-  <a href="/sources/{{.Source.ID}}/staging?area=current">current</a> &middot;
-  <a href="/sources/{{.Source.ID}}/staging?area=revisions">revisions</a> &middot;
-  <a href="/sources/{{.Source.ID}}">back to source</a>
+  <a href="/legacy/sources/{{.Source.ID}}/staging?area=current">current</a> &middot;
+  <a href="/legacy/sources/{{.Source.ID}}/staging?area=revisions">revisions</a> &middot;
+  <a href="/legacy/sources/{{.Source.ID}}">back to source</a>
 </p>
 <p class="mono">{{.Area}}/{{.Listing.RelativePath}}</p>
 {{if .Listing.HasParent}}
-<p><a href="/sources/{{.Source.ID}}/staging?area={{.Area}}&amp;path={{.Listing.Parent}}">up one level</a></p>
+<p><a href="/legacy/sources/{{.Source.ID}}/staging?area={{.Area}}&amp;path={{.Listing.Parent}}">up one level</a></p>
 {{end}}
 {{if .Listing.Missing}}
 <p class="muted">This directory does not exist yet.</p>
@@ -19,7 +19,7 @@
   {{range .Listing.Entries}}
   <tr>
     <td class="mono">
-      {{if .IsDir}}<a href="/sources/{{$source.ID}}/staging?area={{$area}}&amp;path={{if $base}}{{$base}}/{{end}}{{.Name}}">{{.Name}}/</a>
+      {{if .IsDir}}<a href="/legacy/sources/{{$source.ID}}/staging?area={{$area}}&amp;path={{if $base}}{{$base}}/{{end}}{{.Name}}">{{.Name}}/</a>
       {{else}}{{.Name}}{{end}}
     </td>
     <td>{{if .IsDir}}directory{{else if .IsSymlink}}symbolic link{{else if .IsRegular}}file{{else}}other{{end}}</td>

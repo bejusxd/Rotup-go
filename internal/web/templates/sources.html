@@ -1,12 +1,12 @@
 {{template "layout_top" .}}
 <h1>Sources</h1>
-<p><a href="/sources/new">Add a source</a></p>
+<p><a href="/legacy/sources/new">Add a source</a></p>
 {{if .Body}}
 <table>
   <tr><th>Name</th><th>SMB target</th><th>Staging destination</th><th>Policy</th><th>Enabled</th><th>Credential</th><th>Staging state</th><th>Last collection</th></tr>
   {{range .Body}}
   <tr>
-    <td><a href="/sources/{{.Source.ID}}">{{.Source.Name}}</a>{{if .Busy}} <span class="busy">(running)</span>{{end}}</td>
+    <td><a href="/legacy/sources/{{.Source.ID}}">{{.Source.Name}}</a>{{if .Busy}} <span class="busy">(running)</span>{{end}}</td>
     <td class="mono">{{.Source.Host}}/{{.Source.RemotePath}}</td>
     <td class="mono">{{.Source.StagingRelativePath}}</td>
     <td>{{.Source.ReconciliationPolicy}}</td>

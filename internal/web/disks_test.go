@@ -129,7 +129,7 @@ func newDiskServer(t *testing.T, media *fakeMedia) *testServer {
 		t.Fatalf("new handler: %v", err)
 	}
 	server.handler = handler
-	server.token = server.fetchToken(t, "/sources/new")
+	server.token = server.fetchToken(t, "/legacy/sources/new")
 	return server
 }
 
@@ -154,7 +154,7 @@ func TestDisksPageShowsRegisteredAndObservedMedia(t *testing.T) {
 	}
 	server := newDiskServer(t, media)
 
-	response := server.get(t, "/disks")
+	response := server.get(t, "/legacy/disks")
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
@@ -188,12 +188,12 @@ func TestUnregisteredMediaOffersOnlyRegistration(t *testing.T) {
 		},
 	}
 	server := newDiskServer(t, media)
-	body := server.get(t, "/disks").Body.String()
+	body := server.get(t, "/legacy/disks").Body.String()
 
 	if strings.Contains(body, "/mount") || strings.Contains(body, "/unmount") {
 		t.Fatal("unregistered media must not be offered a mount action")
 	}
-	if !strings.Contains(body, "/disks/register") {
+	if !strings.Contains(body, "/legacy/disks/register") {
 		t.Fatal("unregistered media should offer registration")
 	}
 }
@@ -214,9 +214,9 @@ func TestUnsupportedAndAmbiguousMediaCannotBeRegistered(t *testing.T) {
 		},
 	}
 	server := newDiskServer(t, media)
-	body := server.get(t, "/disks").Body.String()
+	body := server.get(t, "/legacy/disks").Body.String()
 
-	if strings.Count(body, `action="/disks/register"`) != 0 {
+	if strings.Count(body, `action="/legacy/disks/register"`) != 0 {
 		t.Fatal("media that cannot be registered must not show a registration form")
 	}
 	for _, fragment := range []string{"duplicate UUID", "not a filesystem ROTUP manages", "no persistent UUID"} {
@@ -232,7 +232,7 @@ func TestRegisterRequiresAFormToken(t *testing.T) {
 	media := &fakeMedia{available: true}
 	server := newDiskServer(t, media)
 
-	response := server.post(t, "/disks/register",
+	response := server.post(t, "/legacy/disks/register",
 		url.Values{"filesystem_uuid": {"1111"}, "name": {"backup A"}}, false)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", response.Code)
@@ -248,7 +248,7 @@ func TestRegisterSucceedsAndRedirects(t *testing.T) {
 	media := &fakeMedia{available: true}
 	server := newDiskServer(t, media)
 
-	response := server.post(t, "/disks/register", url.Values{
+	response := server.post(t, "/legacy/disks/register", url.Values{
 		"filesystem_uuid": {"11111111-2222-3333-4444-555555555555"},
 		"name":            {"backup A"},
 	}, true)
@@ -256,7 +256,7 @@ func TestRegisterSucceedsAndRedirects(t *testing.T) {
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	if response.Header().Get("Location") != "/disks" {
+	if response.Header().Get("Location") != "/legacy/disks" {
 		t.Fatalf("redirect = %q", response.Header().Get("Location"))
 	}
 	if len(media.registered) != 1 {
@@ -275,7 +275,7 @@ func TestRegisterFailureIsShownSafely(t *testing.T) {
 		"more than one connected filesystem claims that UUID")
 	server := newDiskServer(t, media)
 
-	response := server.post(t, "/disks/register",
+	response := server.post(t, "/legacy/disks/register",
 		url.Values{"filesystem_uuid": {"1111"}, "name": {"backup A"}}, true)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", response.Code)
@@ -291,13 +291,13 @@ func TestMountAndUnmountAreExplicitProtectedActions(t *testing.T) {
 	media := &fakeMedia{available: true}
 	server := newDiskServer(t, media)
 
-	if code := server.post(t, "/disks/"+testDiskID+"/mount", url.Values{}, true).Code; code != http.StatusSeeOther {
+	if code := server.post(t, "/legacy/disks/"+testDiskID+"/mount", url.Values{}, true).Code; code != http.StatusSeeOther {
 		t.Fatalf("mount status = %d", code)
 	}
 	if len(media.mounted) != 1 || media.mounted[0] != testDiskID {
 		t.Fatalf("mounted = %#v", media.mounted)
 	}
-	if code := server.post(t, "/disks/"+testDiskID+"/unmount", url.Values{}, true).Code; code != http.StatusSeeOther {
+	if code := server.post(t, "/legacy/disks/"+testDiskID+"/unmount", url.Values{}, true).Code; code != http.StatusSeeOther {
 		t.Fatalf("unmount status = %d", code)
 	}
 	if len(media.unmounted) != 1 {
@@ -305,10 +305,10 @@ func TestMountAndUnmountAreExplicitProtectedActions(t *testing.T) {
 	}
 
 	// Neither may be triggered without a form token.
-	if code := server.post(t, "/disks/"+testDiskID+"/mount", url.Values{}, false).Code; code != http.StatusBadRequest {
+	if code := server.post(t, "/legacy/disks/"+testDiskID+"/mount", url.Values{}, false).Code; code != http.StatusBadRequest {
 		t.Fatalf("an unprotected mount returned %d", code)
 	}
-	if code := server.post(t, "/disks/"+testDiskID+"/unmount", url.Values{}, false).Code; code != http.StatusBadRequest {
+	if code := server.post(t, "/legacy/disks/"+testDiskID+"/unmount", url.Values{}, false).Code; code != http.StatusBadRequest {
 		t.Fatalf("an unprotected unmount returned %d", code)
 	}
 	if len(media.mounted) != 1 || len(media.unmounted) != 1 {
@@ -323,7 +323,7 @@ func TestMediaOperationsRunOnTheDaemonContext(t *testing.T) {
 	media := &fakeMedia{available: true}
 	server := newDiskServer(t, media)
 
-	if code := server.post(t, "/disks/"+testDiskID+"/mount", url.Values{}, true).Code; code != http.StatusSeeOther {
+	if code := server.post(t, "/legacy/disks/"+testDiskID+"/mount", url.Values{}, true).Code; code != http.StatusSeeOther {
 		t.Fatalf("mount status = %d", code)
 	}
 	media.mu.Lock()
@@ -344,7 +344,7 @@ func TestMountFailureIsReportedWithoutClaimingSuccess(t *testing.T) {
 		"the filesystem mounted at the expected mount point carries a different UUID")
 	server := newDiskServer(t, media)
 
-	response := server.post(t, "/disks/"+testDiskID+"/mount", url.Values{}, true)
+	response := server.post(t, "/legacy/disks/"+testDiskID+"/mount", url.Values{}, true)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", response.Code)
 	}
@@ -362,7 +362,7 @@ func TestUpdateDiskMetadata(t *testing.T) {
 	media := &fakeMedia{available: true}
 	server := newDiskServer(t, media)
 
-	response := server.post(t, "/disks/"+testDiskID,
+	response := server.post(t, "/legacy/disks/"+testDiskID,
 		url.Values{"name": {"renamed"}}, true)
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d", response.Code)
@@ -385,7 +385,7 @@ func TestUnsupportedPlatformIsExplainedRatherThanHidden(t *testing.T) {
 	}
 	server := newDiskServer(t, media)
 
-	response := server.get(t, "/disks")
+	response := server.get(t, "/legacy/disks")
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d; the page must still render", response.Code)
 	}
@@ -410,7 +410,7 @@ func TestEnumerationFailureIsSurfacedOnThePage(t *testing.T) {
 		},
 	}
 	server := newDiskServer(t, media)
-	body := server.get(t, "/disks").Body.String()
+	body := server.get(t, "/legacy/disks").Body.String()
 
 	if !strings.Contains(body, "listing block devices failed") {
 		t.Fatal("an enumeration failure must be shown")
@@ -433,7 +433,7 @@ func TestDiskTextIsEscaped(t *testing.T) {
 		},
 	}
 	server := newDiskServer(t, media)
-	body := server.get(t, "/disks").Body.String()
+	body := server.get(t, "/legacy/disks").Body.String()
 
 	if strings.Contains(body, "<script>alert(1)</script>") {
 		t.Fatal("the disks page rendered unescaped markup")
@@ -448,13 +448,13 @@ func TestDisksRoutesAreAbsentWithoutTheMediaSeam(t *testing.T) {
 
 	// The M1 and M2 surface must keep working when media is not wired in.
 	server := newTestServer(t)
-	if code := server.get(t, "/disks").Code; code != http.StatusNotFound {
+	if code := server.get(t, "/legacy/disks").Code; code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 when media is not configured", code)
 	}
 	if code := server.get(t, "/healthz").Code; code != http.StatusOK {
 		t.Fatalf("health status = %d", code)
 	}
-	if code := server.get(t, "/sources").Code; code != http.StatusOK {
+	if code := server.get(t, "/legacy/sources").Code; code != http.StatusOK {
 		t.Fatalf("sources status = %d", code)
 	}
 }

@@ -139,6 +139,18 @@ func NewHandler(deps Deps) (http.Handler, error) {
 	mux := http.NewServeMux()
 	h.apiRoutes(mux)
 	mux.HandleFunc("GET /healthz", h.health)
+	spa, err := newSPAHandler()
+	if err != nil {
+		return nil, err
+	}
+	mux.Handle("/legacy/", http.StripPrefix("/legacy", h.legacyRoutes()))
+	mux.Handle("/", spa)
+	return securityHeaders(mux), nil
+}
+
+func (h *handler) legacyRoutes() http.Handler {
+	deps := h.deps
+	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", h.dashboard)
 
 	if deps.Repo != nil {
@@ -171,7 +183,7 @@ func NewHandler(deps Deps) (http.Handler, error) {
 		mux.HandleFunc("POST /disks/{id}/unmount", h.unmountDisk)
 	}
 
-	return securityHeaders(mux), nil
+	return mux
 }
 
 // securityHeaders applies the response hardening the local UI needs. There is
@@ -180,7 +192,7 @@ func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		header := response.Header()
 		header.Set("Content-Security-Policy",
-			"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+			"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
 		header.Set("X-Content-Type-Options", "nosniff")
 		header.Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(response, request)

@@ -20,11 +20,48 @@ go run ./cmd/rotupd
 
 The dashboard listens on `http://127.0.0.1:8080` by default.
 
+The React interface is embedded in `rotupd`; Node is not needed at runtime.
+The previous server-rendered interface, staging browser and event diagnostics
+remain available at `/legacy/`. `/healthz` remains compatible.
+
+### UI development
+
+Use Node 22.12+ and npm in a second terminal:
+
+```sh
+# Terminal 1 (repository root; keep your existing engine/media environment)
+ROTUP_DEV_MODE=true go run ./cmd/rotupd
+# Terminal 2
+cd web
+npm ci
+npm run dev
+```
+
+Open `http://127.0.0.1:5173`. Vite proxies `/api` and `/legacy` to the daemon on
+port 8080 with same-origin CSRF checks intact. Development mode only reveals
+additional diagnostics; it does not change any safety or backup behavior.
+
+To rebuild the production interface and executable:
+
+```sh
+cd web
+npm ci
+npm test
+npm run build
+cd ..
+go build ./cmd/rotupd
+```
+
+Commit `web/dist` with frontend changes; a plain Go build embeds that exact
+bundle. See [UI development and validation](docs/operations/ui-development.md)
+for API contracts, checkpoint history and remaining limitations.
+
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `ROTUP_HTTP_ADDR` | `127.0.0.1:8080` | Local administration listener |
+| `ROTUP_DEV_MODE` | `false` | Presentation-only diagnostics; `/api/v1/debug/status` returns 404 when disabled |
 | `ROTUP_DB_PATH` | `./rotup-dev.db` | SQLite control-state database |
 | `ROTUP_STAGING_ROOT` | `./rotup-staging` | Root of the ROTUP-owned staging layout |
 | `ROTUP_SECRET_ROOT` | `./rotup-secrets` | Service-owned directory holding secret material |
@@ -59,7 +96,8 @@ engine. ROTUP never downloads or installs rclone or restic.
   browser. Stored passwords are never displayed again.
 - **Disks** (`/disks`) — observed removable media, explicit registration, and
   the mount, verify, flush and unmount lifecycle. Unknown media is observe-only.
-- **History** (`/runs`) — every durable run plus the operational event log.
+- **History** (`/runs`) — the latest 100 durable runs and exact run details;
+  the operational event log remains under `/legacy/runs`.
 - **Repositories** (`/repositories`) — explicit initialize/adopt after password
   escrow acknowledgement, manual backup, repository health and recovery. Backup
   history includes the exact staging read-set and revision coverage.
