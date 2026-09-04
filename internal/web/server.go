@@ -14,6 +14,7 @@ import (
 	"github.com/bejusxd/rotup/internal/collector"
 	"github.com/bejusxd/rotup/internal/domain"
 	"github.com/bejusxd/rotup/internal/staging"
+	"github.com/bejusxd/rotup/internal/system"
 )
 
 // StatusSource is the application seam the dashboard and health endpoint need.
@@ -82,6 +83,13 @@ type EngineStatus struct {
 	Detail           string
 }
 
+// SystemInspector reports this host's own integration readiness: the helper,
+// its sudo policy, the runtime directory and the data locations. It is a
+// function rather than an interface because the daemon only ever needs the
+// read-only half; provisioning is a privileged CLI operation and is
+// deliberately not reachable from the HTTP surface.
+type SystemInspector func(context.Context) system.Report
+
 // Deps are everything the HTTP layer needs.
 type Deps struct {
 	DevMode    bool
@@ -94,7 +102,11 @@ type Deps struct {
 	Staging    StagingBrowser
 	Media      Media
 	Backups    Backups
-	Engine     func() EngineStatus
+	// SystemInspect reports host integration readiness for the setup page. A
+	// nil inspector means the daemon cannot check, which the API states rather
+	// than reporting a ready system it did not verify.
+	SystemInspect SystemInspector
+	Engine        func() EngineStatus
 	// BackupEngine reports the discovered snapshot engine. It is separate from
 	// Engine because a daemon can have one of the two tools and not the other,
 	// and the UI has to be able to say which.

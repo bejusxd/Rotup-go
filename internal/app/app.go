@@ -22,6 +22,7 @@ import (
 	"github.com/bejusxd/rotup/internal/removable"
 	"github.com/bejusxd/rotup/internal/secrets"
 	"github.com/bejusxd/rotup/internal/staging"
+	"github.com/bejusxd/rotup/internal/system"
 	"github.com/bejusxd/rotup/internal/web"
 )
 
@@ -188,20 +189,21 @@ func (a *Application) initialize(ctx context.Context, version string) error {
 	}
 
 	handler, err := web.NewHandler(web.Deps{
-		DevMode:      a.cfg.DevMode,
-		Version:      version,
-		Status:       a,
-		Repo:         a.store,
-		BackupRepo:   a.store,
-		Admin:        a.admin,
-		Runner:       a.work,
-		Staging:      layout,
-		Media:        a.media,
-		Backups:      a.backups,
-		Engine:       a.EngineStatus,
-		BackupEngine: a.BackupEngineStatus,
-		Logger:       a.logger,
-		Background:   func() context.Context { return a.workCtx },
+		DevMode:       a.cfg.DevMode,
+		Version:       version,
+		Status:        a,
+		Repo:          a.store,
+		BackupRepo:    a.store,
+		Admin:         a.admin,
+		Runner:        a.work,
+		Staging:       layout,
+		Media:         a.media,
+		Backups:       a.backups,
+		SystemInspect: a.inspectSystem,
+		Engine:        a.EngineStatus,
+		BackupEngine:  a.BackupEngineStatus,
+		Logger:        a.logger,
+		Background:    func() context.Context { return a.workCtx },
 	})
 	if err != nil {
 		return fmt.Errorf("initialize HTTP handlers: %w", err)
@@ -213,6 +215,27 @@ func (a *Application) initialize(ctx context.Context, version string) error {
 		IdleTimeout:       60 * time.Second,
 	}
 	return nil
+}
+
+// inspectSystem reports host integration readiness for the setup page. It runs
+// the same read-only inspection as `rotupd doctor` and, like it, changes
+// nothing. Provisioning is deliberately not reachable from HTTP: repairing a
+// sudo policy is a privileged operation an administrator performs at a
+// terminal, never something a browser request can trigger.
+func (a *Application) inspectSystem(ctx context.Context) system.Report {
+	options := system.Options{
+		RclonePath:   a.cfg.RclonePath,
+		ResticPath:   a.cfg.ResticPath,
+		LsblkPath:    a.cfg.LsblkPath,
+		StagingRoot:  a.cfg.StagingRoot,
+		SecretRoot:   a.cfg.SecretRoot,
+		DatabasePath: a.cfg.DatabasePath,
+		// The daemon is not the installer and cannot start a probe process on
+		// every page load, so active checks stay off here. `rotupd doctor
+		// --active` is what proves the helper invocation end to end.
+		Active: false,
+	}
+	return system.Inspect(ctx, system.NewOSHost(), options).Report
 }
 
 // probeEngine records the transfer engine's availability. A missing engine is a

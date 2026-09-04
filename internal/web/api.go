@@ -20,6 +20,7 @@ func (h *handler) apiRoutes(root *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/health", h.health)
 	mux.HandleFunc("GET /api/v1/system", h.apiSystem)
 	mux.HandleFunc("GET /api/v1/dashboard", h.apiDashboard)
+	mux.HandleFunc("GET /api/v1/setup", h.apiSetupStatus)
 	if h.deps.Repo != nil {
 		mux.HandleFunc("GET /api/v1/sources", h.apiSources)
 		mux.HandleFunc("GET /api/v1/sources/{id}", h.apiSource)
