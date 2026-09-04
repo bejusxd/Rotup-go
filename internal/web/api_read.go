@@ -289,6 +289,10 @@ func (h *handler) apiRun(w http.ResponseWriter, r *http.Request) {
 		}
 		if b != nil {
 			dto := backupInfo(*b)
+			// The run list resolves a backup run's recorded target the same way.
+			// A detail view that omitted it left the operator on a page with no
+			// route back to the storage the run actually wrote to.
+			v.Run.RepositoryID, v.Run.DiskID = b.RepositoryID, b.DiskID
 			states, err := h.deps.BackupRepo.BackupSourceStates(ctx, run.ID)
 			if err != nil {
 				h.apiError(w, err)

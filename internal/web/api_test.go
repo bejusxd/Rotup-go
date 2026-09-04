@@ -93,7 +93,9 @@ func TestAPIBackupHistoryUsesRecordedTargetsAndReadSet(t *testing.T) {
 		t.Fatalf("missing recorded target: %d %s", list.Code, list.Body.String())
 	}
 	detail := apiRequest(t, h, "GET", "/api/v1/runs/backup-one", "", false)
-	for _, expected := range []string{"captured-collection", "captured-batch", `"stateVersion":42`, "candidate-only", `"durableSuccessAt":null`, `"durability":"UNPROVEN"`} {
+	// The list and the detail must agree about a run's recorded target so the
+	// detail page can link back to the storage the run wrote to.
+	for _, expected := range []string{"captured-collection", "captured-batch", `"stateVersion":42`, "candidate-only", `"durableSuccessAt":null`, `"durability":"UNPROVEN"`, `"repositoryId":"captured-repo"`, `"diskId":"captured-disk"`} {
 		if detail.Code != 200 || !strings.Contains(detail.Body.String(), expected) {
 			t.Fatalf("missing %s: %d %s", expected, detail.Code, detail.Body.String())
 		}

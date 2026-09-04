@@ -101,7 +101,7 @@ export function RunPage() {
       {run.repositoryId && (
         <p>
           <Link to={`/repositories/${run.repositoryId}`}>
-            View associated backup storage →
+            Open the backup storage this run used →
           </Link>
         </p>
       )}
