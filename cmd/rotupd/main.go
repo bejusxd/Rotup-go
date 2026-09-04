@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -20,9 +19,17 @@ func main() {
 }
 
 func run() int {
+	// A subcommand is provisioning or diagnostics and must work on a host whose
+	// configuration is not valid yet -- that is often exactly why doctor is
+	// being run -- so it is dispatched before the daemon loads its configuration.
+	if code, handled := dispatch(os.Args[1:], os.Stdout, os.Stderr); handled {
+		return code
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "invalid configuration: %v\n", err)
+		fprintErr("invalid configuration: %v\n", err)
+		fprintErr("Run `rotupd doctor` to see what this host is missing.\n")
 		return 1
 	}
 

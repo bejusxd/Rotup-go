@@ -265,6 +265,11 @@ func provisionSudoers(ctx context.Context, host Host, options SetupOptions, layo
 func validateSudoers(ctx context.Context, host Host, content string, report *Report) error {
 	visudo, err := host.LookPath("visudo")
 	if err != nil {
+		// A root shell often has /usr/sbin on PATH and a service context does
+		// not, so the conventional locations are tried before giving up.
+		visudo = firstExisting(host, "/usr/sbin/visudo", "/sbin/visudo")
+	}
+	if visudo == "" {
 		report.Warn(GroupHelper, "setup.sudoers.validated", "Sudo policy syntax",
 			"visudo is not available, so the generated rule was installed without an external syntax check",
 			"Install sudo's own tooling if you want setup to validate the file before installing it.")

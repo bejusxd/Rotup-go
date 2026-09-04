@@ -22,6 +22,28 @@ type Options struct {
 	RclonePath string
 	ResticPath string
 	LsblkPath  string
+	// StagingRoot, SecretRoot and DatabasePath override the standard install
+	// locations. Doctor has to check the paths this host will actually run
+	// with, not the ones a default install would have used, or it reports a
+	// working development deployment as broken.
+	StagingRoot  string
+	SecretRoot   string
+	DatabasePath string
+}
+
+// resolved returns the paths this host will actually use.
+func (o Options) resolved() (staging, secret, database string, custom bool) {
+	staging, secret, database = StagingRoot, SecretRoot, DatabasePath
+	if o.StagingRoot != "" {
+		staging, custom = o.StagingRoot, true
+	}
+	if o.SecretRoot != "" {
+		secret, custom = o.SecretRoot, true
+	}
+	if o.DatabasePath != "" {
+		database, custom = o.DatabasePath, true
+	}
+	return staging, secret, database, custom
 }
 
 // Inspection is a complete read-only assessment.
@@ -54,7 +76,7 @@ func Inspect(ctx context.Context, host Host, options Options) Inspection {
 	inspectTools(ctx, host, options, &inspection)
 	inspectHelper(ctx, host, options, &inspection)
 	inspectRuntime(host, &inspection)
-	inspectData(host, &inspection)
+	inspectData(host, options, &inspection)
 	if !options.SkipService {
 		inspectService(ctx, host, &inspection)
 	}
@@ -319,11 +341,12 @@ func inspectSudoers(host Host, in *Inspection) {
 			"sudo ignores a policy file it does not trust. Run `sudo rotupd setup`.")
 		return
 	}
-	// sudo refuses to read a sudoers.d file that anyone but its owner can
-	// write, so a wrong mode here silently removes every media operation.
-	if state.Mode.Perm()&0o177 != 0 {
+	// sudo refuses to read a file in sudoers.d that group or other can write,
+	// and a wrong mode here silently removes every media operation. The
+	// convention the distributions ship, and what setup installs, is 0440.
+	if state.Mode.Perm()&0o022 != 0 {
 		report.Fail(GroupHelper, "helper.sudoers", "Sudo policy",
-			fmt.Sprintf("%s is mode %04o; sudo requires 0440", SudoersPath, state.Mode.Perm()),
+			fmt.Sprintf("%s is mode %04o and writable beyond its owner; sudo will ignore it", SudoersPath, state.Mode.Perm()),
 			fmt.Sprintf("Run `sudo rotupd setup`, or `sudo chmod 0440 %s`.", SudoersPath))
 		return
 	}
@@ -454,52 +477,60 @@ func inspectRuntime(host Host, in *Inspection) {
 		TmpfilesPath+" recreates the runtime tree at boot")
 }
 
-func inspectData(host Host, in *Inspection) {
+func inspectData(host Host, options Options, in *Inspection) {
 	report := &in.Report
 	layout := in.Layout
+	stagingRoot, secretRoot, databasePath, custom := options.resolved()
+	if custom {
+		// Say so explicitly. A doctor run that silently checked the standard
+		// locations while the daemon uses others would be reassuring about the
+		// wrong host.
+		report.OK(GroupData, "data.configured", "Configured locations",
+			"checking the paths this host is configured with, not the default install layout")
+	} else {
+		checkDataDir(host, report, layout, "data.dir", "Data directory", DataDir, DataDirMode)
+	}
+	checkDataDir(host, report, layout, "data.staging", "Staging root", stagingRoot, DataDirMode)
 
-	checkDataDir(host, report, layout, "data.dir", "Data directory", DataDir, DataDirMode)
-	checkDataDir(host, report, layout, "data.staging", "Staging root", StagingRoot, DataDirMode)
-
-	state, err := host.Lstat(SecretRoot)
+	state, err := host.Lstat(secretRoot)
 	switch {
 	case err != nil || !state.Exists:
 		report.Warn(GroupData, "data.secrets", "Secret store",
-			SecretRoot+" does not exist yet; the daemon creates it on first start",
+			secretRoot+" does not exist yet; the daemon creates it on first start",
 			"Run `sudo rotupd setup` to create it now with 0700 permissions.")
 	case !state.IsDir:
-		report.Fail(GroupData, "data.secrets", "Secret store", SecretRoot+" is not a directory",
+		report.Fail(GroupData, "data.secrets", "Secret store", secretRoot+" is not a directory",
 			"Move the file aside. ROTUP will not store credentials anywhere else.")
 	case state.Mode.Perm()&0o077 != 0:
 		// This is the one permission finding that is unambiguously dangerous:
 		// it exposes stored credential material to other accounts.
 		report.Fail(GroupData, "data.secrets", "Secret store",
-			fmt.Sprintf("%s is mode %04o and readable beyond its owner", SecretRoot, state.Mode.Perm()),
-			fmt.Sprintf("Run `sudo chmod 0700 %s`. Stored source and repository passwords are protected by these bits alone.", SecretRoot))
+			fmt.Sprintf("%s is mode %04o and readable beyond its owner", secretRoot, state.Mode.Perm()),
+			fmt.Sprintf("Run `sudo chmod 0700 %s`. Stored source and repository passwords are protected by these bits alone.", secretRoot))
 	case layout.UID > 0 && state.UID >= 0 && state.UID != layout.UID:
 		report.Fail(GroupData, "data.secrets", "Secret store",
-			fmt.Sprintf("%s is owned by uid %d, but the daemon runs as %s (uid %d)", SecretRoot, state.UID, layout.User, layout.UID),
+			fmt.Sprintf("%s is owned by uid %d, but the daemon runs as %s (uid %d)", secretRoot, state.UID, layout.User, layout.UID),
 			"The daemon cannot read its own credentials. Run `sudo rotupd setup`.")
 	default:
 		report.OK(GroupData, "data.secrets", "Secret store",
-			fmt.Sprintf("%s, mode %04o, contents never inspected", SecretRoot, state.Mode.Perm()))
+			fmt.Sprintf("%s, mode %04o, contents never inspected", secretRoot, state.Mode.Perm()))
 	}
 
-	database, err := host.Lstat(DatabasePath)
+	database, err := host.Lstat(databasePath)
 	switch {
 	case err != nil || !database.Exists:
 		report.OK(GroupData, "data.database", "Database",
-			DatabasePath+" does not exist yet; the daemon creates and migrates it on first start")
+			databasePath+" does not exist yet; the daemon creates and migrates it on first start")
 	case database.IsDir:
-		report.Fail(GroupData, "data.database", "Database", DatabasePath+" is a directory",
+		report.Fail(GroupData, "data.database", "Database", databasePath+" is a directory",
 			"Point ROTUP_DB_PATH at a file, or move the directory aside.")
 	case layout.UID > 0 && database.UID >= 0 && database.UID != layout.UID:
 		report.Fail(GroupData, "data.database", "Database",
-			fmt.Sprintf("%s is owned by uid %d, but the daemon runs as %s (uid %d)", DatabasePath, database.UID, layout.User, layout.UID),
+			fmt.Sprintf("%s is owned by uid %d, but the daemon runs as %s (uid %d)", databasePath, database.UID, layout.User, layout.UID),
 			"The daemon cannot open its own database. Correct the ownership.")
 	default:
 		report.OK(GroupData, "data.database", "Database",
-			fmt.Sprintf("%s, %d bytes", DatabasePath, database.Size))
+			fmt.Sprintf("%s, %d bytes", databasePath, database.Size))
 	}
 }
 

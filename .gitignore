@@ -4,5 +4,8 @@ rotup-dev.db-wal
 rotup-staging/
 rotup-secrets/
 .cache/
-rotupd
-rotupd.exe
+# Built binaries land in the repository root. These patterns are anchored with a
+# leading slash on purpose: a bare "rotupd" also matched the cmd/rotupd package
+# directory, so new source files there were silently untracked.
+/rotupd
+/rotupd.exe
