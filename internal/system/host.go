@@ -51,11 +51,17 @@ type Host interface {
 	// LookPath finds an executable on PATH.
 	LookPath(file string) (string, error)
 
-	// Lstat observes a path without following a final symlink. A path that does
-	// not exist is not an error; it is a FileState with Exists false.
+	// Lstat observes a managed path without following a final symlink. A path
+	// that does not exist is not an error; it is a FileState with Exists false.
 	Lstat(path string) (FileState, error)
-	// ReadFile reads a whole file.
+	// ReadFile reads a whole managed file.
 	ReadFile(path string) ([]byte, error)
+	// StatSource and ReadSource observe a path the operator supplied, such as a
+	// freshly built binary in a build directory. They are separate from Lstat
+	// and ReadFile because a source is never part of the installation this
+	// package manages, and must not be relocated with it.
+	StatSource(path string) (FileState, error)
+	ReadSource(path string) ([]byte, error)
 	// WriteFileAtomic writes content to a temporary file beside path and
 	// renames it into place, so a reader never sees a half-written policy file.
 	WriteFileAtomic(path string, content []byte, mode fs.FileMode) error
@@ -206,8 +212,17 @@ func (h *OSHost) Lstat(path string) (FileState, error) {
 	return state, nil
 }
 
-// ReadFile reads a file.
+// ReadFile reads a managed file.
 func (h *OSHost) ReadFile(path string) ([]byte, error) { return os.ReadFile(h.resolve(path)) }
+
+// StatSource observes an operator-supplied path exactly as given.
+func (h *OSHost) StatSource(path string) (FileState, error) {
+	unrooted := &OSHost{}
+	return unrooted.Lstat(path)
+}
+
+// ReadSource reads an operator-supplied path exactly as given.
+func (h *OSHost) ReadSource(path string) ([]byte, error) { return os.ReadFile(path) }
 
 // WriteFileAtomic writes through a temporary file in the destination directory
 // and renames it, so a concurrent reader sees either the old file or the new
