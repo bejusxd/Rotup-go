@@ -9,6 +9,11 @@ type SecretPurpose string
 const (
 	// SecretPurposeSMBPassword is the password used to read an SMB source.
 	SecretPurposeSMBPassword SecretPurpose = "SMB_PASSWORD"
+	// SecretPurposeRepositoryPassword is the password that encrypts a restic
+	// repository on one registered disk. Unlike a source password it cannot be
+	// reset: losing it makes every snapshot on that media unreadable, which is
+	// why establishing a repository requires an explicit escrow acknowledgement.
+	SecretPurposeRepositoryPassword SecretPurpose = "REPOSITORY_PASSWORD"
 )
 
 // SecretProviderFile is the v1 provider: a service-owned directory of files.

@@ -38,6 +38,43 @@ type MountResult struct {
 	Mounted        bool
 }
 
+// DiskLease is exclusive use of one registered disk for the whole span of a
+// multi-step repository operation.
+//
+// It exists because mounting, writing, flushing and unmounting are separate
+// steps that must not be interleaved with anything else touching that disk.
+// The holder can ask for each step but never learns how any of them is
+// performed and never sees a device node: the media lifecycle stays behind this
+// interface, so a repository operation cannot reach media by a weaker route
+// than an administrator's explicit action does.
+type DiskLease interface {
+	DiskID() string
+	// MountPoint reports where this disk is mounted when ROTUP mounts it. It is
+	// derived from the disk identifier, never from an observation.
+	MountPoint() (string, error)
+	// Mounted reports whether this lease currently has a mount in place.
+	Mounted() bool
+	// Mount mounts the disk and proves the mounted filesystem is the registered
+	// one.
+	Mount(ctx context.Context) error
+	// SyncAndUnmount flushes the filesystem, removes the mount, and verifies
+	// from the kernel mount table that the mount is really gone.
+	SyncAndUnmount(ctx context.Context) error
+	// Present reports whether the registered filesystem is still connected.
+	Present(ctx context.Context) (bool, error)
+	// SetStatus records an operational status while the operation runs.
+	SetStatus(ctx context.Context, status domain.DiskStatus) error
+	// Release ends the lease. It is safe to call more than once.
+	Release()
+}
+
+// DiskLeaser hands out exclusive use of a registered disk.
+type DiskLeaser interface {
+	// Acquire fails immediately when the disk is already in use, rather than
+	// queueing behind work of unbounded duration.
+	Acquire(ctx context.Context, diskID string) (DiskLease, error)
+}
+
 // MountManager owns the mount lifecycle of registered media. Every method
 // addresses a disk by its ROTUP identifier and its filesystem UUID; none of
 // them accepts a path.

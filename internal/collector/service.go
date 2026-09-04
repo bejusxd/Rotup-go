@@ -51,6 +51,13 @@ type Service struct {
 	locks  *keyedLocks
 	now    func() time.Time
 	inline bool
+
+	// barrier is the daemon-wide staging mutation barrier. A collection may
+	// only reconcile a source's staging tree when no backup is reading it, and
+	// a backup may only read a tree no collection is reconciling. The two
+	// services share one barrier; two separate ones would each be individually
+	// consistent and jointly useless.
+	barrier *staging.Barrier
 }
 
 // Options configures the service.
@@ -59,6 +66,9 @@ type Options struct {
 	Engine ports.TransferEngine
 	Layout *staging.Layout
 	Logger *slog.Logger
+	// Barrier is the shared staging mutation barrier. A nil value builds a
+	// private one, which is only correct in a test that has no backup service.
+	Barrier *staging.Barrier
 	// Now is injectable for deterministic tests.
 	Now func() time.Time
 	// RunInline executes work synchronously instead of in a goroutine. Tests
@@ -76,23 +86,31 @@ func New(base context.Context, options Options) *Service {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	barrier := options.Barrier
+	if barrier == nil {
+		barrier = staging.NewBarrier()
+	}
 	return &Service{
-		store:  options.Store,
-		engine: options.Engine,
-		layout: options.Layout,
-		logger: logger.With("component", component),
-		base:   base,
-		locks:  newKeyedLocks(),
-		now:    now,
-		inline: options.RunInline,
+		store:   options.Store,
+		engine:  options.Engine,
+		layout:  options.Layout,
+		logger:  logger.With("component", component),
+		base:    base,
+		locks:   newKeyedLocks(),
+		now:     now,
+		inline:  options.RunInline,
+		barrier: barrier,
 	}
 }
 
 // Wait blocks until every background run has finished.
 func (s *Service) Wait() { s.wg.Wait() }
 
-// Busy reports whether a source currently has work in flight.
-func (s *Service) Busy(sourceID string) bool { return s.locks.held(sourceID) }
+// Busy reports whether a source currently has work in flight, either its own
+// operation or a backup reading its staging tree.
+func (s *Service) Busy(sourceID string) bool {
+	return s.locks.held(sourceID) || s.barrier.BeingRead(sourceID)
+}
 
 // StartConnectionTest creates a durable connection-test run and executes it in
 // the background. It returns the run identifier immediately.
@@ -130,9 +148,29 @@ func (s *Service) start(ctx context.Context, sourceID string, kind domain.RunKin
 			"another operation is already running for this source")
 	}
 
+	// A collection reconciles the source's current tree and its revision area,
+	// so it additionally takes the staging mutation barrier, which fails when a
+	// backup is reading that source. The locks are always taken in this order,
+	// and a backup never takes the per-source operation lock, so the two paths
+	// cannot deadlock. A connection test mutates nothing and is deliberately
+	// left outside the barrier: it must not be able to stall a backup.
+	releaseBarrier := func() {}
+	if kind == domain.RunKindCollection {
+		barrierRelease, barrierErr := s.barrier.AcquireMutation(sourceID)
+		if barrierErr != nil {
+			release()
+			return "", barrierErr
+		}
+		releaseBarrier = barrierRelease
+	}
+	releaseAll := func() {
+		releaseBarrier()
+		release()
+	}
+
 	runID, err := domain.NewID()
 	if err != nil {
-		release()
+		releaseAll()
 		return "", err
 	}
 	now := s.now()
@@ -147,18 +185,18 @@ func (s *Service) start(ctx context.Context, sourceID string, kind domain.RunKin
 		UpdatedAt:   now,
 	}
 	if err := s.store.RecordRun(ctx, run); err != nil {
-		release()
+		releaseAll()
 		return "", err
 	}
 
 	if s.inline {
-		execute(s.base, run, *source, release)
+		execute(s.base, run, *source, releaseAll)
 		return runID, nil
 	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		execute(s.base, run, *source, release)
+		execute(s.base, run, *source, releaseAll)
 	}()
 	return runID, nil
 }

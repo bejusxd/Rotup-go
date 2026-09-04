@@ -64,6 +64,38 @@ func templateFuncs() template.FuncMap {
 				return "busy"
 			}
 		},
+		"repositoryClass": func(health domain.RepositoryHealth) string {
+			switch health {
+			case domain.RepositoryHealthy:
+				return "ok"
+			case domain.RepositorySuspect, domain.RepositoryRecoveryRequired:
+				return "bad"
+			case domain.RepositoryInitializing:
+				return "busy"
+			default:
+				return "muted"
+			}
+		},
+		"stageClass": func(stage domain.DurabilityStage) string {
+			switch stage {
+			case domain.StageDurableSuccess:
+				return "ok"
+			case domain.StageFailed:
+				return "bad"
+			default:
+				// Every other stage on a finished run means the backup stopped
+				// short of its durability boundary, which the page must not
+				// present as a neutral fact.
+				return "busy"
+			}
+		},
+		"shortID": func(value string) string {
+			if len(value) <= 8 {
+				return value
+			}
+			return value[:8]
+		},
+		"minimumRepositoryPassword": func() int { return domain.MinimumRepositoryPasswordLength },
 		"stagingClass": func(status domain.StagingStatus) string {
 			switch status {
 			case domain.StagingStable:

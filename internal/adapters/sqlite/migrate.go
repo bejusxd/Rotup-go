@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"embed"
 	"encoding/hex"
 	"fmt"
@@ -16,11 +17,18 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
+// tableRebuildDirective marks a migration that rebuilds a table other tables
+// have foreign keys into. Such a migration needs SQLite's documented rebuild
+// procedure rather than an ordinary transaction; see applyMigration.
+const tableRebuildDirective = "-- rotup:table-rebuild"
+
 type migration struct {
 	version  int
 	name     string
 	checksum string
 	sql      string
+	// rebuildsReferencedTable is set by the directive above.
+	rebuildsReferencedTable bool
 }
 
 type appliedMigration struct {
@@ -109,10 +117,11 @@ func readMigrations() ([]migration, error) {
 		}
 		digest := sha256.Sum256(contents)
 		result = append(result, migration{
-			version:  version,
-			name:     entry.Name(),
-			checksum: hex.EncodeToString(digest[:]),
-			sql:      string(contents),
+			version:                 version,
+			name:                    entry.Name(),
+			checksum:                hex.EncodeToString(digest[:]),
+			sql:                     string(contents),
+			rebuildsReferencedTable: strings.Contains(string(contents), tableRebuildDirective),
 		})
 	}
 
@@ -142,7 +151,42 @@ func (s *Store) readAppliedMigrations(ctx context.Context) (map[int]appliedMigra
 	return result, nil
 }
 
-func (s *Store) applyMigration(ctx context.Context, item migration) error {
+// applyMigration runs one migration in a single transaction.
+//
+// A migration that rebuilds a table other tables reference needs more than
+// that, and follows SQLite's documented rebuild procedure instead: foreign keys
+// are disabled on the connection before the transaction begins and restored
+// after it ends.
+//
+// That is not a shortcut around the constraints, it is the only way to keep
+// them from destroying data. With foreign keys enabled, DROP TABLE performs an
+// implicit delete of every row first, which fires each child's referential
+// action: a cascading child would be emptied, a set-null child would lose its
+// links, and a restricting child would abort the migration. Disabling them
+// makes the drop what it is meant to be — a schema change, not a deletion — and
+// the explicit foreign_key_check inside the transaction is what proves the
+// result is still referentially whole before it is committed.
+//
+// This runs at startup, on the store's single connection, before anything else
+// can use the database.
+func (s *Store) applyMigration(ctx context.Context, item migration) (migrationErr error) {
+	if item.rebuildsReferencedTable {
+		if _, err := s.db.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+			return fmt.Errorf("prepare migration %03d for a table rebuild: %w", item.version, err)
+		}
+		defer func() {
+			restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if _, err := s.db.ExecContext(restoreCtx, "PRAGMA foreign_keys = ON"); err != nil {
+				// Losing foreign key enforcement silently would be far worse
+				// than a failed migration, so this is loud.
+				s.logger.Error("SQLite foreign key enforcement could not be restored after a migration",
+					"version", item.version, "error", err)
+				migrationErr = fmt.Errorf("restore foreign key enforcement: %w (migration result: %v)", err, migrationErr)
+			}
+		}()
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin migration %03d: %w", item.version, err)
@@ -151,6 +195,12 @@ func (s *Store) applyMigration(ctx context.Context, item migration) error {
 
 	if _, err := tx.ExecContext(ctx, item.sql); err != nil {
 		return fmt.Errorf("execute migration %03d: %w", item.version, err)
+	}
+	if item.rebuildsReferencedTable {
+		if err := verifyForeignKeys(ctx, tx); err != nil {
+			return fmt.Errorf("migration %03d left the database referentially inconsistent: %w",
+				item.version, err)
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO schema_migrations (version, name, checksum, applied_at)
@@ -164,6 +214,37 @@ func (s *Store) applyMigration(ctx context.Context, item migration) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration %03d: %w", item.version, err)
+	}
+	return nil
+}
+
+// verifyForeignKeys runs SQLite's foreign key check inside a migration
+// transaction. It reports violations regardless of whether enforcement is
+// currently enabled, which is exactly what a rebuild needs: the constraints are
+// off so the swap can happen, and this is the proof that the result honours
+// them anyway.
+func verifyForeignKeys(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return fmt.Errorf("foreign key check: %w", err)
+	}
+	defer rows.Close()
+
+	var violations []string
+	for rows.Next() {
+		var table, parent sql.NullString
+		var rowID, constraint sql.NullInt64
+		if err := rows.Scan(&table, &rowID, &parent, &constraint); err != nil {
+			return fmt.Errorf("scan foreign key check: %w", err)
+		}
+		violations = append(violations,
+			fmt.Sprintf("%s row %d references missing %s", table.String, rowID.Int64, parent.String))
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate foreign key check: %w", err)
+	}
+	if len(violations) > 0 {
+		return fmt.Errorf("%d violation(s): %s", len(violations), strings.Join(violations, "; "))
 	}
 	return nil
 }

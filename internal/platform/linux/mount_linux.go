@@ -216,7 +216,11 @@ func (m *MountManager) invoke(ctx context.Context, timeout time.Duration, comman
 			"the mount helper produced output ROTUP could not read", err)
 	}
 	if !result.OK {
-		return result, domain.NewError(domain.ErrClassUnavailable, helperErrorCode(result.ErrorCode),
+		class := domain.ErrClassUnavailable
+		if result.ErrorCode == "privilege_required" || result.ErrorCode == "device_access_denied" {
+			class = domain.ErrClassConfiguration
+		}
+		return result, domain.NewError(class, helperErrorCode(result.ErrorCode),
 			helperErrorMessage(result))
 	}
 	if process.ExitCode != 0 {

@@ -19,7 +19,9 @@ const (
 	EnvStagingRoot       = "ROTUP_STAGING_ROOT"
 	EnvSecretRoot        = "ROTUP_SECRET_ROOT"
 	EnvRclonePath        = "ROTUP_RCLONE_PATH"
+	EnvResticPath        = "ROTUP_RESTIC_PATH"
 	EnvCollectionTimeout = "ROTUP_COLLECTION_TIMEOUT"
+	EnvBackupTimeout     = "ROTUP_BACKUP_TIMEOUT"
 	EnvLsblkPath         = "ROTUP_LSBLK_PATH"
 	EnvMountHelperPath   = "ROTUP_MOUNT_HELPER"
 	EnvMediaPollInterval = "ROTUP_MEDIA_POLL_INTERVAL"
@@ -33,6 +35,7 @@ const (
 	DefaultStagingRoot       = "./rotup-staging"
 	DefaultSecretRoot        = "./rotup-secrets"
 	DefaultCollectionTimeout = 2 * time.Hour
+	DefaultBackupTimeout     = 6 * time.Hour
 	DefaultLsblkPath         = "/usr/bin/lsblk"
 	DefaultMediaPollInterval = 15 * time.Second
 )
@@ -56,8 +59,17 @@ type Config struct {
 	// so the daemon warns when this is set.
 	RcloneFromPath bool
 
+	// ResticPath is the explicit restic executable path.
+	ResticPath string
+	// ResticFromPath records that ResticPath was discovered on the inherited
+	// PATH rather than configured. Production deployments must configure it,
+	// so the daemon warns when this is set.
+	ResticFromPath bool
+
 	// CollectionTimeout bounds one collection transfer.
 	CollectionTimeout time.Duration
+	// BackupTimeout bounds one restic snapshot operation.
+	BackupTimeout time.Duration
 
 	// LsblkPath is the explicit path to the block-device listing tool.
 	LsblkPath string
@@ -83,6 +95,7 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		SecretRoot:        valueOrDefault(lookup, EnvSecretRoot, DefaultSecretRoot),
 		LogLevel:          slog.LevelInfo,
 		CollectionTimeout: DefaultCollectionTimeout,
+		BackupTimeout:     DefaultBackupTimeout,
 		LsblkPath:         valueOrDefault(lookup, EnvLsblkPath, DefaultLsblkPath),
 		MountHelperPath:   strings.TrimSpace(valueOrDefault(lookup, EnvMountHelperPath, "")),
 		MediaPollInterval: DefaultMediaPollInterval,
@@ -112,6 +125,17 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		cfg.CollectionTimeout = duration
 	}
 
+	if raw, ok := lookup(EnvBackupTimeout); ok && strings.TrimSpace(raw) != "" {
+		duration, err := time.ParseDuration(strings.TrimSpace(raw))
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %w", EnvBackupTimeout, err)
+		}
+		if duration <= 0 {
+			return Config{}, fmt.Errorf("%s must be positive", EnvBackupTimeout)
+		}
+		cfg.BackupTimeout = duration
+	}
+
 	if raw, ok := lookup(EnvMediaPollInterval); ok && strings.TrimSpace(raw) != "" {
 		duration, err := time.ParseDuration(strings.TrimSpace(raw))
 		if err != nil {
@@ -127,6 +151,9 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 	if err := resolveRclone(&cfg, lookup); err != nil {
+		return Config{}, err
+	}
+	if err := resolveRestic(&cfg, lookup); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -184,6 +211,34 @@ func resolveRclone(cfg *Config, lookup func(string) (string, bool)) error {
 	if discovered, err := exec.LookPath("rclone"); err == nil {
 		cfg.RclonePath = discovered
 		cfg.RcloneFromPath = true
+	}
+	return nil
+}
+
+// resolveRestic selects the backup engine executable, using the same rule as
+// the transfer engine: an explicit path is used verbatim, and the inherited
+// PATH is only a development convenience whose use is flagged so the daemon can
+// warn about it.
+func resolveRestic(cfg *Config, lookup func(string) (string, bool)) error {
+	if raw, ok := lookup(EnvResticPath); ok && strings.TrimSpace(raw) != "" {
+		path := strings.TrimSpace(raw)
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("%s: %w", EnvResticPath, err)
+		}
+		info, err := os.Stat(absolute)
+		if err != nil {
+			return fmt.Errorf("%s: %w", EnvResticPath, err)
+		}
+		if info.IsDir() {
+			return fmt.Errorf("%s must name an executable, not a directory", EnvResticPath)
+		}
+		cfg.ResticPath = absolute
+		return nil
+	}
+	if discovered, err := exec.LookPath("restic"); err == nil {
+		cfg.ResticPath = discovered
+		cfg.ResticFromPath = true
 	}
 	return nil
 }

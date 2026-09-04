@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bejusxd/rotup/internal/backup"
 	"github.com/bejusxd/rotup/internal/collector"
 	"github.com/bejusxd/rotup/internal/domain"
 	"github.com/bejusxd/rotup/internal/staging"
@@ -34,6 +35,17 @@ type Repository interface {
 	SourceResult(ctx context.Context, runID, sourceID string) (*domain.SourceResult, error)
 	ListRevisionBatches(ctx context.Context, sourceID string, limit int) ([]domain.RevisionBatch, error)
 	ListEvents(ctx context.Context, limit int) ([]domain.Event, error)
+}
+
+// BackupRepository is the read seam for the durable backup detail a run page
+// shows. It is separate from Repository so a deployment without the backup
+// milestone wired in still renders every other page.
+type BackupRepository interface {
+	BackupRun(ctx context.Context, runID string) (*domain.BackupRun, error)
+	BackupSourceStates(ctx context.Context, runID string) ([]domain.BackupSourceState, error)
+	BackupRevisionBatches(ctx context.Context, runID string) ([]domain.BackupRevisionBatch, error)
+	Repository(ctx context.Context, id string) (*domain.Repository, error)
+	RevisionCoverageForBatch(ctx context.Context, batchID string) ([]domain.RevisionCoverage, error)
 }
 
 // SourceAdmin is the configuration and credential use-case seam.
@@ -71,15 +83,21 @@ type EngineStatus struct {
 
 // Deps are everything the HTTP layer needs.
 type Deps struct {
-	Version string
-	Status  StatusSource
-	Repo    Repository
-	Admin   SourceAdmin
-	Runner  Collector
-	Staging StagingBrowser
-	Media   Media
-	Engine  func() EngineStatus
-	Logger  *slog.Logger
+	Version    string
+	Status     StatusSource
+	Repo       Repository
+	BackupRepo BackupRepository
+	Admin      SourceAdmin
+	Runner     Collector
+	Staging    StagingBrowser
+	Media      Media
+	Backups    Backups
+	Engine     func() EngineStatus
+	// BackupEngine reports the discovered snapshot engine. It is separate from
+	// Engine because a daemon can have one of the two tools and not the other,
+	// and the UI has to be able to say which.
+	BackupEngine func() EngineStatus
+	Logger       *slog.Logger
 	// Background returns a context bound to the daemon's lifetime rather than
 	// to an HTTP request, so an operation a browser started survives that
 	// browser going away.
@@ -134,6 +152,14 @@ func NewHandler(deps Deps) (http.Handler, error) {
 		mux.HandleFunc("GET /runs", h.listRuns)
 		mux.HandleFunc("GET /runs/{id}", h.showRun)
 	}
+	if deps.Backups != nil {
+		mux.HandleFunc("GET /repositories", h.listRepositories)
+		mux.HandleFunc("GET /repositories/{id}", h.showRepository)
+		mux.HandleFunc("POST /disks/{id}/repository/init", h.initializeRepository)
+		mux.HandleFunc("POST /disks/{id}/repository/adopt", h.adoptRepository)
+		mux.HandleFunc("POST /repositories/{id}/backup", h.startBackup)
+		mux.HandleFunc("POST /repositories/{id}/recover", h.recoverRepository)
+	}
 	if deps.Media != nil {
 		mux.HandleFunc("GET /disks", h.listDisks)
 		mux.HandleFunc("POST /disks/register", h.registerDisk)
@@ -165,6 +191,8 @@ type dashboardData struct {
 	DatabaseStatus    string
 	LatestRun         *domain.Run
 	Engine            EngineStatus
+	BackupEngine      EngineStatus
+	Repositories      []backup.RepositoryView
 	Sources           []sourceRow
 	Error             string
 }
@@ -178,6 +206,9 @@ func (h *handler) dashboard(response http.ResponseWriter, request *http.Request)
 	}
 	if h.deps.Engine != nil {
 		data.Engine = h.deps.Engine()
+	}
+	if h.deps.BackupEngine != nil {
+		data.BackupEngine = h.deps.BackupEngine()
 	}
 
 	statusCode := http.StatusOK
@@ -200,6 +231,11 @@ func (h *handler) dashboard(response http.ResponseWriter, request *http.Request)
 				data.Error = "sources could not be read"
 			} else {
 				data.Sources = rows
+			}
+		}
+		if h.deps.Backups != nil && statusCode == http.StatusOK {
+			if repositories, err := h.deps.Backups.ListRepositories(request.Context()); err == nil {
+				data.Repositories = repositories
 			}
 		}
 	}

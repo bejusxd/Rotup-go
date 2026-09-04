@@ -96,13 +96,22 @@ func main() {
 		if err := media.ValidateFilesystemType(*fsType); err != nil {
 			fail("unsupported_filesystem", err.Error())
 		}
+		requirePrivilege()
 		doMount(mountPoint, *fsUUID, *fsType)
 	case media.CommandSync:
+		requirePrivilege()
 		doSync(mountPoint)
 	case media.CommandUnmount:
+		requirePrivilege()
 		doUnmount(mountPoint)
 	default:
 		fail("usage", "unknown operation")
+	}
+}
+
+func requirePrivilege() {
+	if os.Geteuid() != 0 {
+		fail("privilege_required", "the mount helper must run as root through the installed sudo wrapper or setuid helper; keep rotupd unprivileged")
 	}
 }
 
@@ -133,7 +142,10 @@ func doMount(mountPoint, fsUUID, fsType string) {
 	// lsblk/udev is discovery, not permission to trust a stale signature.
 	fd, err := unix.Open(device, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		fail("device_not_found", "the resolved device could not be opened")
+		if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) {
+			fail("device_access_denied", "the helper lacks permission to open the resolved block device; check its privilege and device access policy")
+		}
+		fail("device_not_found", "the resolved device could not be opened: "+errnoText(err))
 	}
 	handle := os.NewFile(uintptr(fd), device)
 	defer handle.Close()

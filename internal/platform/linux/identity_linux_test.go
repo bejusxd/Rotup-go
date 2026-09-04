@@ -55,3 +55,23 @@ func TestResolveFilesystemUsesTheSameUnfilteredUUIDObservations(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveFilesystemDoesNotReuseAnEarlierDeviceNode(t *testing.T) {
+	t.Parallel()
+	runner := &scriptedRunner{result: ports.ProcessResult{Exited: true, Stdout: []byte(`{
+		"blockdevices":[{"path":"/dev/loop1","size":67108864,"fstype":"ext4","uuid":"aaaa-bbbb"}]}`)}}
+	enumerator := NewEnumerator("/usr/bin/lsblk", runner)
+	first, err := enumerator.ResolveFilesystem(context.Background(), "aaaa-bbbb")
+	if err != nil || first.DevicePath != "/dev/loop1" {
+		t.Fatalf("initial resolution = %#v, %v", first, err)
+	}
+	// The previous name now denotes another filesystem. Only a fresh complete
+	// listing can find the requested UUID at its current node.
+	runner.result.Stdout = []byte(`{"blockdevices":[
+		{"path":"/dev/loop1","size":67108864,"fstype":"ext4","uuid":"cccc-dddd"},
+		{"path":"/dev/loop2","size":67108864,"fstype":"ext4","uuid":"aaaa-bbbb"}]}`)
+	second, err := enumerator.ResolveFilesystem(context.Background(), "aaaa-bbbb")
+	if err != nil || second.DevicePath != "/dev/loop2" || len(runner.calls) != 2 {
+		t.Fatalf("fresh resolution = %#v, %v; calls = %d", second, err, len(runner.calls))
+	}
+}

@@ -1,0 +1,120 @@
+{{template "layout_top" .}}
+{{with .Body}}
+<h1>Repositories</h1>
+
+{{if not .Engine.Available}}
+<p class="banner error">
+  The backup engine is unavailable{{if .Engine.Detail}}: {{.Engine.Detail}}{{end}}.
+  Repository and backup actions cannot run until restic is configured.
+</p>
+{{else}}
+<p class="muted">restic {{.Engine.Version}}{{if .Engine.DiscoveredOnPath}}
+  <span class="bad">discovered on the inherited PATH; set ROTUP_RESTIC_PATH explicitly for production</span>{{end}}
+</p>
+{{end}}
+{{if .Refresh}}<p class="banner notice">A repository operation is running. This page refreshes automatically.</p>{{end}}
+
+<p class="muted">
+  Each registered disk holds its own restic repository, with its own snapshots and
+  its own history. A repository is identified by the pair of the disk's filesystem
+  UUID and restic's own repository identity, and both are verified before anything
+  writes. ROTUP never shows a repository password after it is stored.
+</p>
+
+<h2>Established repositories</h2>
+{{if .Repositories}}
+<table>
+  <tr><th>Disk</th><th>Filesystem UUID</th><th>Repository identity</th><th>Health</th>
+      <th>Last snapshot</th><th>Last successful backup</th><th></th></tr>
+  {{range .Repositories}}
+  <tr>
+    <td>{{if .Disk}}{{.Disk.Name}}{{else}}<span class="muted">unknown disk</span>{{end}}
+        {{if not .Connected}}<br><span class="muted">not connected</span>{{end}}
+        {{if .Busy}}<br><span class="busy">operation running</span>{{end}}</td>
+    <td class="mono">{{.Repository.FilesystemUUID}}</td>
+    <td class="mono">{{if .Repository.ResticRepositoryID}}{{shortID .Repository.ResticRepositoryID}}{{else}}<span class="muted">not proven</span>{{end}}</td>
+    <td>
+      <span class="{{repositoryClass .Repository.Health}}">{{.Repository.Health}}</span>
+      {{if .Repository.SuspectReason}}<br><span class="muted">{{.Repository.SuspectReason}}</span>{{end}}
+    </td>
+    <td class="mono">{{if .Repository.LastSnapshotID}}{{shortID .Repository.LastSnapshotID}}{{else}}&mdash;{{end}}</td>
+    <td>{{if .Repository.LastSuccessfulBackupAt}}{{timestamp .Repository.LastSuccessfulBackupAt.UTC}}{{else}}&mdash;{{end}}</td>
+    <td><a href="/repositories/{{.Repository.ID}}">Open</a></td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p class="muted">No repositories have been established yet.</p>
+{{end}}
+
+<h2>Registered disks without an established repository</h2>
+{{if .Candidates}}
+<p class="muted">
+  Establishing a repository mounts the disk, verifies its identity, creates or
+  adopts the restic repository at ROTUP's own location on it, flushes the
+  filesystem and unmounts it. It is never done automatically just because a disk
+  is registered.
+</p>
+{{range .Candidates}}
+<h3>{{.Disk.Name}} <span class="muted mono">{{.Disk.FilesystemUUID}}</span></h3>
+{{if not .Disk.Enabled}}
+<p class="muted">This disk is disabled. Enable it on the Disks page first.</p>
+{{else if ne (printf "%s" .Status) "AVAILABLE_UNMOUNTED"}}
+<p class="muted">This disk is currently {{.Status}}. A repository can be established when it is
+  connected and idle.</p>
+{{else}}
+<form method="post" action="/disks/{{.Disk.ID}}/repository/init">
+  {{template "csrf" $.CSRFToken}}
+  <label>Repository password
+    <input type="password" name="repository_password" autocomplete="new-password" required
+           minlength="{{minimumRepositoryPassword}}">
+  </label>
+  <p class="muted">
+    restic cannot reset or recover this password. If it is lost, every snapshot on
+    this disk becomes unreadable. Record it in your password manager or an off-host
+    record before continuing; ROTUP stores it only so unattended backups can run,
+    and will never show it again.
+  </p>
+  <label><input type="checkbox" name="escrow_acknowledged" value="1" required>
+    I have recorded this repository password outside this host.</label>
+  <button type="submit">Initialize a new repository</button>
+</form>
+<form method="post" action="/disks/{{.Disk.ID}}/repository/adopt">
+  {{template "csrf" $.CSRFToken}}
+  <p class="muted">
+    If this disk already carries a ROTUP restic repository, adopt it instead. Adoption
+    opens the existing repository with the password you supply and records its
+    identity; it never creates one and never replaces one.
+  </p>
+  <label>Existing repository password
+    <input type="password" name="repository_password" autocomplete="off" required
+           minlength="{{minimumRepositoryPassword}}">
+  </label>
+  <label><input type="checkbox" name="escrow_acknowledged" value="1" required>
+    I have recorded this repository password outside this host.</label>
+  <button type="submit">Adopt the existing repository</button>
+</form>
+{{end}}
+{{end}}
+{{else}}
+<p class="muted">Every registered disk already has an established repository.</p>
+{{end}}
+
+<h2>Recent repository events</h2>
+{{if .Events}}
+<table>
+  <tr><th>Occurred</th><th>Severity</th><th>Type</th><th>Detail</th></tr>
+  {{range .Events}}
+  <tr>
+    <td>{{timestamp .OccurredAt}}</td>
+    <td>{{.Severity}}</td>
+    <td class="mono">{{.EventType}}</td>
+    <td class="mono">{{.PayloadJSON}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p class="muted">No repository events recorded.</p>
+{{end}}
+{{end}}
+{{template "layout_bottom" .}}

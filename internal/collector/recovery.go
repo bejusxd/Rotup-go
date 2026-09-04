@@ -28,6 +28,12 @@ func (s *Service) Recover(ctx context.Context) (RecoveryReport, error) {
 		return report, err
 	}
 	for _, run := range active {
+		if run.Kind.TouchesRepository() {
+			// Repository work has its own recovery, which needs the run's
+			// durability stage to decide what the media may be holding. It runs
+			// before this one and owns those rows.
+			continue
+		}
 		run.Status = domain.RunStatusInterrupted
 		run.FinishedAt = s.now()
 		run.ErrorClass = domain.ErrClassCancellation

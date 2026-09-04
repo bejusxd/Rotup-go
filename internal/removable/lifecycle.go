@@ -114,7 +114,13 @@ func (s *Service) Mount(ctx context.Context, diskID string) error {
 		return busyError()
 	}
 	defer release()
+	return s.mount(ctx, diskID)
+}
 
+// mount performs the mount with the disk's lock already held. A repository
+// operation holds that lock for its whole span through a Lease, so it calls
+// this rather than Mount.
+func (s *Service) mount(ctx context.Context, diskID string) error {
 	disk, err := s.requireDisk(ctx, diskID)
 	if err != nil {
 		return err
@@ -268,7 +274,12 @@ func (s *Service) SyncAndUnmount(ctx context.Context, diskID string) error {
 		return busyError()
 	}
 	defer release()
+	return s.syncAndUnmount(ctx, diskID)
+}
 
+// syncAndUnmount performs the flush and unmount with the disk's lock already
+// held, for a repository operation holding a Lease.
+func (s *Service) syncAndUnmount(ctx context.Context, diskID string) error {
 	disk, err := s.requireDisk(ctx, diskID)
 	if err != nil {
 		return err

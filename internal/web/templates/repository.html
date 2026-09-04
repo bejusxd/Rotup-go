@@ -1,0 +1,151 @@
+{{template "layout_top" .}}
+{{with .Body}}
+{{$repo := .Repository.Repository}}
+<h1>Repository{{if .Repository.Disk}} on {{.Repository.Disk.Name}}{{end}}</h1>
+<p><a href="/repositories">Back to repositories</a></p>
+
+{{if .Refresh}}<p class="banner notice">An operation is running. This page refreshes automatically.</p>{{end}}
+{{if not .Engine.Available}}
+<p class="banner error">
+  The backup engine is unavailable{{if .Engine.Detail}}: {{.Engine.Detail}}{{end}}.
+</p>
+{{end}}
+
+<h2>Identity and health</h2>
+<table>
+  <tr><th>Registered disk</th>
+      <td>{{if .Repository.Disk}}{{.Repository.Disk.Name}}{{else}}<span class="muted">unknown</span>{{end}}
+          {{if not .Repository.Connected}}<span class="muted">(not connected)</span>{{end}}</td></tr>
+  <tr><th>Filesystem UUID</th><td class="mono">{{$repo.FilesystemUUID}}</td></tr>
+  <tr><th>Repository path on the disk</th><td class="mono">{{$repo.RelativePath}}</td></tr>
+  <tr><th>restic repository identity</th>
+      <td class="mono">{{if $repo.ResticRepositoryID}}{{$repo.ResticRepositoryID}}{{else}}<span class="muted">not proven</span>{{end}}</td></tr>
+  <tr><th>Origin</th><td>{{$repo.Origin}}</td></tr>
+  <tr><th>Health</th>
+      <td><span class="{{repositoryClass $repo.Health}}">{{$repo.Health}}</span>
+          {{if $repo.SuspectReason}}<br><span class="muted">{{$repo.SuspectReason}}</span>{{end}}</td></tr>
+  <tr><th>Password stored</th>
+      <td>{{if .Repository.HasPassword}}yes <span class="muted">(never displayed)</span>{{else}}<span class="bad">no</span>{{end}}</td></tr>
+  <tr><th>Escrow acknowledged</th>
+      <td>{{if $repo.EscrowAcknowledgedAt}}{{timestamp $repo.EscrowAcknowledgedAt.UTC}}{{else}}<span class="bad">never</span>{{end}}</td></tr>
+  <tr><th>Established</th>
+      <td>{{if $repo.EstablishedAt}}{{timestamp $repo.EstablishedAt.UTC}}{{else}}&mdash;{{end}}</td></tr>
+  <tr><th>Last opened</th>
+      <td>{{if $repo.LastOpenedAt}}{{timestamp $repo.LastOpenedAt.UTC}}{{else}}&mdash;{{end}}</td></tr>
+  <tr><th>Last snapshot</th>
+      <td class="mono">{{if $repo.LastSnapshotID}}{{$repo.LastSnapshotID}}{{else}}&mdash;{{end}}</td></tr>
+  <tr><th>Last successful backup</th>
+      <td>{{if $repo.LastSuccessfulBackupAt}}{{timestamp $repo.LastSuccessfulBackupAt.UTC}}{{else}}&mdash;{{end}}</td></tr>
+</table>
+
+<h2>Back up now</h2>
+{{if not $repo.Health.WritableForBackup}}
+<p class="banner error">
+  This repository is {{$repo.Health}}. ROTUP will not write to a repository whose
+  state it has not proven. Run a recovery below; if it can open the repository,
+  read its identity and its snapshots, and pass a structural check, the repository
+  is flushed and unmounted, then returns to HEALTHY. An interrupted backup is
+  adopted only when its unique snapshot, recorded read-set and clean restic
+  completion can all be proven. Unknown or incomplete results earn no coverage.
+</p>
+{{else if not .Repository.Connected}}
+<p class="muted">This repository's disk is not connected.</p>
+{{else}}
+<form method="post" action="/repositories/{{$repo.ID}}/backup">
+  {{template "csrf" $.CSRFToken}}
+  <p class="muted">
+    A backup snapshots the current published state of the sources you select, plus
+    every completed revision batch they hold. What it reads is captured and recorded
+    before restic starts, and the run is only reported as a success after the
+    snapshot has been verified by a separate read, the filesystem flushed, and the
+    unmount confirmed.
+  </p>
+  {{if .Sources}}
+  <table>
+    <tr><th></th><th>Source</th><th>Staging state</th><th>Version</th><th>Why not</th></tr>
+    {{range .Sources}}
+    <tr>
+      <td>{{if .Eligible}}<input type="checkbox" name="source_id" value="{{.Source.ID}}" checked>{{end}}</td>
+      <td>{{.Source.Name}}</td>
+      <td><span class="{{stagingClass .Source.StagingStatus}}">{{.Source.StagingStatus}}</span></td>
+      <td>{{.Source.StagingStateVersion}}</td>
+      <td>{{if not .Eligible}}<span class="muted">{{.Reason}}</span>{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+  {{else}}
+  <p class="muted">No enabled sources are configured.</p>
+  {{end}}
+  {{if .AnyEligible}}
+  <button type="submit">Start backup</button>
+  {{else}}
+  <p class="muted">
+    No source currently has a stable published staging state, so there is nothing a
+    backup could honestly contain. Collect a source first.
+  </p>
+  {{end}}
+</form>
+{{end}}
+
+<h2>Recovery</h2>
+<p class="muted">
+  Recovery is always explicit. It mounts the disk, verifies the repository identity,
+  reads the snapshot listing, runs restic's non-destructive structural check, and
+  looks for the snapshot of every backup an interruption left unproven. It never
+  deletes anything and never re-runs a backup.
+</p>
+{{if .Repository.Connected}}
+<form method="post" action="/repositories/{{$repo.ID}}/recover">
+  {{template "csrf" $.CSRFToken}}
+  <button type="submit">Verify and recover this repository</button>
+</form>
+{{else}}
+<p class="muted">Connect this repository's disk to run a recovery.</p>
+{{end}}
+
+<h2>Backup history</h2>
+{{if .History}}
+<table>
+  <tr><th>Requested</th><th>Status</th><th>Durability stage</th><th>Snapshot</th>
+      <th>Files</th><th>Bytes</th><th></th></tr>
+  {{range .History}}
+  <tr>
+    <td>{{timestamp .Run.RequestedAt}}</td>
+    <td>{{template "run_status" .Run}}
+        {{if eq (printf "%s" .Backup.Durability) "ADOPTED_AFTER_INTERRUPTION"}}
+        <br><span class="busy">adopted after interruption</span>{{end}}</td>
+    <td><span class="{{stageClass .Backup.Stage}}">{{.Backup.Stage}}</span></td>
+    <td class="mono">
+      {{if .Backup.VerifiedSnapshotID}}{{shortID .Backup.VerifiedSnapshotID}}
+      {{else if .Backup.CandidateSnapshotID}}{{shortID .Backup.CandidateSnapshotID}}
+        <span class="bad">unverified</span>
+      {{else}}&mdash;{{end}}
+    </td>
+    <td>{{.Backup.FilesProcessed}}</td>
+    <td>{{bytes .Backup.BytesProcessed}}</td>
+    <td><a href="/runs/{{.Run.ID}}">Detail</a></td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p class="muted">This repository has no backup history yet.</p>
+{{end}}
+
+<h2>Recent repository events</h2>
+{{if .Events}}
+<table>
+  <tr><th>Occurred</th><th>Severity</th><th>Type</th><th>Detail</th></tr>
+  {{range .Events}}
+  <tr>
+    <td>{{timestamp .OccurredAt}}</td>
+    <td>{{.Severity}}</td>
+    <td class="mono">{{.EventType}}</td>
+    <td class="mono">{{.PayloadJSON}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p class="muted">No repository events recorded.</p>
+{{end}}
+{{end}}
+{{template "layout_bottom" .}}

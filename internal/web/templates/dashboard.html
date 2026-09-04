@@ -10,7 +10,29 @@
   {{if .Engine.Detail}}<span class="muted">— {{.Engine.Detail}}</span>{{end}}
   {{if .Engine.DiscoveredOnPath}}<span class="busy">— discovered on PATH; set ROTUP_RCLONE_PATH for production</span>{{end}}
 </p>
+<p>Backup engine:
+  {{if .BackupEngine.Available}}<span class="ok">{{.BackupEngine.Name}} {{.BackupEngine.Version}}</span>
+  {{else}}<span class="bad">unavailable</span>{{end}}
+  {{if .BackupEngine.Detail}}<span class="muted">— {{.BackupEngine.Detail}}</span>{{end}}
+  {{if .BackupEngine.DiscoveredOnPath}}<span class="busy">— discovered on PATH; set ROTUP_RESTIC_PATH for production</span>{{end}}
+</p>
 {{if .Error}}<p class="banner error">Dashboard error: {{.Error}}</p>{{end}}
+
+{{if .Repositories}}
+<h2>Repositories</h2>
+<table>
+  <tr><th>Disk</th><th>Health</th><th>Last snapshot</th><th>Last successful backup</th></tr>
+  {{range .Repositories}}
+  <tr>
+    <td><a href="/repositories/{{.Repository.ID}}">{{if .Disk}}{{.Disk.Name}}{{else}}{{.Repository.ID}}{{end}}</a>
+        {{if not .Connected}}<span class="muted">(not connected)</span>{{end}}</td>
+    <td><span class="{{repositoryClass .Repository.Health}}">{{.Repository.Health}}</span></td>
+    <td class="mono">{{if .Repository.LastSnapshotID}}{{shortID .Repository.LastSnapshotID}}{{else}}&mdash;{{end}}</td>
+    <td>{{if .Repository.LastSuccessfulBackupAt}}{{timestamp .Repository.LastSuccessfulBackupAt.UTC}}{{else}}&mdash;{{end}}</td>
+  </tr>
+  {{end}}
+</table>
+{{end}}
 
 <h2>Latest run</h2>
 {{with .LatestRun}}

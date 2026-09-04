@@ -74,3 +74,23 @@ func assertRefusedBeforeHelper(t *testing.T, runner *scriptedRunner, err error) 
 		t.Fatalf("a refused request reached the helper %d times", len(runner.calls))
 	}
 }
+
+func TestMountManagerReportsMissingPrivilegeAsConfigurationNotMissingMedia(t *testing.T) {
+	t.Parallel()
+	for _, code := range []string{"privilege_required", "device_access_denied"} {
+		t.Run(code, func(t *testing.T) {
+			runner := &scriptedRunner{result: ports.ProcessResult{
+				Started: true, Exited: true, ExitCode: 1,
+				Stdout: []byte(`{"ok":false,"error_code":"` + code + `","error_message":"permission required"}`),
+			}}
+			manager := NewMountManager("/usr/libexec/rotup-mounthelper", runner)
+			_, err := manager.Mount(context.Background(), ports.MountRequest{
+				DiskID: "11111111-2222-4333-8444-555555555555", FilesystemUUID: "aaaa-bbbb", FilesystemType: "ext4",
+			})
+			var typed *domain.Error
+			if !domain.AsError(err, &typed) || typed.Class != domain.ErrClassConfiguration || typed.Code != "mount_helper_"+code {
+				t.Fatalf("error = %v, want configuration error for %s", err, code)
+			}
+		})
+	}
+}

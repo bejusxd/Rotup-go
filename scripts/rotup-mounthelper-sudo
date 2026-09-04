@@ -1,0 +1,4 @@
+#!/bin/sh
+# Install this wrapper root-owned. The daemon stays unprivileged; only the
+# fixed, root-owned helper is authorized by the narrow sudoers rule.
+exec /usr/bin/sudo -n -- /usr/libexec/rotup-mounthelper "$@"

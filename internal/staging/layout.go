@@ -140,6 +140,28 @@ func RevisionRelativePath(sourceID, runID string) string {
 	return RevisionsDirName + "/" + sourceID + "/" + runID
 }
 
+// CurrentRelativePath returns the root-relative slash path of a source's
+// current tree. A backup read-set records it so history shows exactly which
+// staging path was read, without depending on the source configuration still
+// agreeing with what it said at the time.
+func CurrentRelativePath(source domain.Source) (string, error) {
+	relative, err := domain.NormalizeRelativePath(source.StagingRelativePath, "staging destination")
+	if err != nil {
+		return "", err
+	}
+	if relative == "" {
+		return "", domain.NewError(domain.ErrClassInvariant, "staging_path_empty",
+			"source has no staging destination")
+	}
+	return SourcesDirName + "/" + relative + "/" + CurrentDirName, nil
+}
+
+// MetadataRelativePath returns the root-relative slash path of a source's
+// staging metadata directory.
+func MetadataRelativePath(sourceID string) string {
+	return MetadataDirName + "/" + sourceID
+}
+
 // PreparePaths creates and returns every directory one collection run needs.
 // archive is only created when the policy archives displaced objects.
 func (l *Layout) PreparePaths(source domain.Source, runID string, archive bool) (SourcePaths, error) {

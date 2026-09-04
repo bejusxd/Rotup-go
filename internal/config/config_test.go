@@ -24,6 +24,38 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Fatalf("log level = %v, want %v", cfg.LogLevel, slog.LevelInfo)
 	}
+	if cfg.BackupTimeout != DefaultBackupTimeout {
+		t.Fatalf("backup timeout = %v, want %v", cfg.BackupTimeout, DefaultBackupTimeout)
+	}
+}
+
+func TestResticConfiguration(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "restic")
+	if err := os.WriteFile(path, nil, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, timeout := range []string{"45m", "0", "-1h", "bad"} {
+		cfg, err := load(func(key string) (string, bool) {
+			switch key {
+			case EnvResticPath:
+				return path, true
+			case EnvBackupTimeout:
+				return timeout, true
+			default:
+				return "", false
+			}
+		})
+		if timeout != "45m" {
+			if err == nil {
+				t.Fatalf("accepted invalid backup timeout %q", timeout)
+			}
+			continue
+		}
+		if err != nil || cfg.BackupTimeout != 45*time.Minute || cfg.ResticPath != path || cfg.ResticFromPath {
+			t.Fatalf("explicit restic configuration = %#v / %v", cfg, err)
+		}
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {

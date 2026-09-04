@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/bejusxd/rotup/internal/adapters/rclone"
+	"github.com/bejusxd/rotup/internal/adapters/restic"
 	"github.com/bejusxd/rotup/internal/adapters/sqlite"
+	"github.com/bejusxd/rotup/internal/backup"
 	"github.com/bejusxd/rotup/internal/collector"
 	"github.com/bejusxd/rotup/internal/config"
 	"github.com/bejusxd/rotup/internal/domain"
@@ -23,7 +25,10 @@ import (
 	"github.com/bejusxd/rotup/internal/web"
 )
 
-const shutdownTimeout = 5 * time.Second
+// Allow the five-second header deadline (including newly accepted connections
+// with no request yet) to expire before Shutdown's own deadline. Equal budgets
+// race and can report a failed shutdown even when no handler is doing work.
+const shutdownTimeout = 10 * time.Second
 
 // Application owns the daemon lifecycle and resources.
 type Application struct {
@@ -31,11 +36,14 @@ type Application struct {
 	logger  *slog.Logger
 	store   *sqlite.Store
 	layout  *staging.Layout
+	barrier *staging.Barrier
 	secrets *secrets.FileStore
 	engine  *rclone.Engine
+	snapper *restic.Engine
 	work    *collector.Service
 	admin   *collector.Admin
 	media   *removable.Service
+	backups *backup.Service
 	server  *http.Server
 
 	// workCtx bounds background work to the daemon's lifetime rather than to
@@ -46,6 +54,7 @@ type Application struct {
 
 	status      atomic.Value
 	engineState atomic.Value
+	backupState atomic.Value
 	closeOnce   sync.Once
 	closeErr    error
 }
@@ -65,6 +74,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger, version st
 	application := &Application{cfg: cfg, logger: logger, store: store}
 	application.status.Store("starting")
 	application.engineState.Store(web.EngineStatus{})
+	application.backupState.Store(web.EngineStatus{})
 
 	if err := application.initialize(ctx, version); err != nil {
 		_ = store.Close()
@@ -100,14 +110,26 @@ func (a *Application) initialize(ctx context.Context, version string) error {
 	}, process.NewRunner(), secretStore, secretStore, a.logger)
 	a.probeEngine(ctx)
 
+	a.snapper = restic.New(restic.Config{
+		ExecutablePath: a.cfg.ResticPath,
+		BackupTimeout:  a.cfg.BackupTimeout,
+	}, process.NewRunner(), secretStore, secretStore, a.logger)
+	a.probeBackupEngine(ctx)
+
+	// One barrier for the whole daemon. Collection takes mutation rights;
+	// a backup excludes every mutation for the duration of its staging read.
+	// Both services must use the same object.
+	a.barrier = staging.NewBarrier()
+
 	workCtx, cancel := context.WithCancel(context.Background())
 	a.workCtx = workCtx
 	a.workCancel = cancel
 	a.work = collector.New(workCtx, collector.Options{
-		Store:  a.store,
-		Engine: a.engine,
-		Layout: layout,
-		Logger: a.logger,
+		Store:   a.store,
+		Engine:  a.engine,
+		Layout:  layout,
+		Barrier: a.barrier,
+		Logger:  a.logger,
 	})
 	a.admin = collector.NewAdmin(a.store, secretStore, layout, a.logger)
 
@@ -119,7 +141,31 @@ func (a *Application) initialize(ctx context.Context, version string) error {
 		Logger:     a.logger,
 	})
 
+	a.backups = backup.New(workCtx, backup.Options{
+		Store:   a.store,
+		Engine:  a.snapper,
+		Media:   a.media,
+		Layout:  layout,
+		Barrier: a.barrier,
+		Secrets: secretStore,
+		Logger:  a.logger,
+	})
+
 	// Recovery runs before the HTTP surface exists, so no new work can race it.
+	//
+	// Repository recovery goes first because it is the one that needs a run's
+	// durability stage to decide what the media may be holding; the collection
+	// boundary would otherwise already have rewritten those rows.
+	backupReport, err := a.backups.Recover(ctx)
+	if err != nil {
+		return fmt.Errorf("startup repository recovery: %w", err)
+	}
+	if backupReport.InterruptedRuns > 0 || backupReport.RepositoriesSuspected > 0 {
+		a.logger.Warn("startup repository recovery completed",
+			"interrupted_runs", backupReport.InterruptedRuns,
+			"repositories_marked_suspect", backupReport.RepositoriesSuspected)
+	}
+
 	report, err := a.work.Recover(ctx)
 	if err != nil {
 		return fmt.Errorf("startup recovery: %w", err)
@@ -142,16 +188,19 @@ func (a *Application) initialize(ctx context.Context, version string) error {
 	}
 
 	handler, err := web.NewHandler(web.Deps{
-		Version:    version,
-		Status:     a,
-		Repo:       a.store,
-		Admin:      a.admin,
-		Runner:     a.work,
-		Staging:    layout,
-		Media:      a.media,
-		Engine:     a.EngineStatus,
-		Logger:     a.logger,
-		Background: func() context.Context { return a.workCtx },
+		Version:      version,
+		Status:       a,
+		Repo:         a.store,
+		BackupRepo:   a.store,
+		Admin:        a.admin,
+		Runner:       a.work,
+		Staging:      layout,
+		Media:        a.media,
+		Backups:      a.backups,
+		Engine:       a.EngineStatus,
+		BackupEngine: a.BackupEngineStatus,
+		Logger:       a.logger,
+		Background:   func() context.Context { return a.workCtx },
 	})
 	if err != nil {
 		return fmt.Errorf("initialize HTTP handlers: %w", err)
@@ -198,6 +247,42 @@ func (a *Application) probeEngine(ctx context.Context) {
 // EngineStatus reports the discovered transfer engine to the UI.
 func (a *Application) EngineStatus() web.EngineStatus {
 	return a.engineState.Load().(web.EngineStatus)
+}
+
+// probeBackupEngine records the snapshot engine's availability. As with the
+// transfer engine, a missing restic is a degraded configuration rather than a
+// fatal error: the daemon still runs, and the UI explains why repository and
+// backup actions are unavailable rather than failing obscurely later.
+func (a *Application) probeBackupEngine(ctx context.Context) {
+	status := web.EngineStatus{Name: "restic", DiscoveredOnPath: a.cfg.ResticFromPath}
+	if !a.snapper.Available() {
+		status.Detail = "no restic executable is configured; set ROTUP_RESTIC_PATH"
+		a.backupState.Store(status)
+		a.logger.Warn("backup engine unavailable", "reason", status.Detail)
+		return
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	info, err := a.snapper.Probe(probeCtx)
+	if err != nil {
+		status.Detail = "the configured restic executable could not be probed"
+		a.backupState.Store(status)
+		a.logger.Warn("backup engine probe failed", "path", a.cfg.ResticPath, "error", err)
+		return
+	}
+	status.Available = true
+	status.Version = info.Version
+	a.backupState.Store(status)
+	a.logger.Info("backup engine ready", "engine", info.Name, "version", info.Version, "path", info.Path)
+	if a.cfg.ResticFromPath {
+		a.logger.Warn("restic was discovered on the inherited PATH; set ROTUP_RESTIC_PATH explicitly for production")
+	}
+}
+
+// BackupEngineStatus reports the discovered snapshot engine to the UI.
+func (a *Application) BackupEngineStatus() web.EngineStatus {
+	return a.backupState.Load().(web.EngineStatus)
 }
 
 func (a *Application) recordDemoRun(ctx context.Context) error {
@@ -322,6 +407,9 @@ func (a *Application) Close() error {
 		}
 		if a.work != nil {
 			a.work.Wait()
+		}
+		if a.backups != nil {
+			a.backups.Wait()
 		}
 		a.background.Wait()
 		a.closeErr = a.store.Close()

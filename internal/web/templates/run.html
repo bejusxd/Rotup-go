@@ -33,6 +33,84 @@
 </table>
 {{end}}
 
+{{with .Backup}}
+<h2>Backup</h2>
+<table>
+  <tr><th>Repository</th>
+      <td>{{if $.Body.Repository}}<a href="/repositories/{{$.Body.Repository.ID}}">{{$.Body.Repository.ID}}</a>{{else}}{{.RepositoryID}}{{end}}</td></tr>
+  <tr><th>Registered disk</th><td class="mono">{{.DiskID}}</td></tr>
+  <tr><th>Filesystem UUID</th>
+      <td class="mono">{{if $.Body.Repository}}{{$.Body.Repository.FilesystemUUID}}{{else}}&mdash;{{end}}</td></tr>
+  <tr><th>Semantics</th><td>{{.Semantics}}</td></tr>
+  <tr><th>Durability stage</th>
+      <td><span class="{{stageClass .Stage}}">{{.Stage}}</span>
+        {{if not (eq (printf "%s" .Stage) "DURABLE_SUCCESS")}}
+        <br><span class="muted">A backup is only a success once its snapshot has been verified,
+          the filesystem flushed, and the unmount confirmed.</span>{{end}}</td></tr>
+  <tr><th>Durability</th><td>{{.Durability}}</td></tr>
+  <tr><th>Candidate snapshot</th>
+      <td class="mono">{{if .CandidateSnapshotID}}{{.CandidateSnapshotID}}{{else}}&mdash;{{end}}</td></tr>
+  <tr><th>Verified snapshot</th>
+      <td class="mono">{{if .VerifiedSnapshotID}}{{.VerifiedSnapshotID}}{{else}}<span class="muted">not verified</span>{{end}}</td></tr>
+  <tr><th>Read-set captured</th><td>{{timestamp .ReadSetCapturedAt}}</td></tr>
+  <tr><th>Staging barrier acquired</th><td>{{timestamp .BarrierAcquiredAt}}</td></tr>
+  <tr><th>restic started</th><td>{{timestamp .ResticStartedAt}}</td></tr>
+  <tr><th>Snapshot verified</th><td>{{timestamp .SnapshotVerifiedAt}}</td></tr>
+  <tr><th>Filesystem synced</th><td>{{timestamp .SyncedAt}}</td></tr>
+  <tr><th>Unmount verified</th><td>{{timestamp .UnmountVerifiedAt}}</td></tr>
+  <tr><th>Durable success</th><td>{{timestamp .DurableSuccessAt}}</td></tr>
+  <tr><th>Files processed</th><td>{{.FilesProcessed}}
+      <span class="muted">({{.FilesNew}} new, {{.FilesChanged}} changed, {{.FilesUnmodified}} unmodified)</span></td></tr>
+  <tr><th>Bytes processed</th><td>{{bytes .BytesProcessed}}</td></tr>
+  <tr><th>Bytes added to the repository</th><td>{{bytes .BytesAdded}}</td></tr>
+  <tr><th>Engine errors</th><td>{{.EngineErrors}}</td></tr>
+</table>
+
+<h2>Read-set</h2>
+<p class="muted">
+  This is exactly what the run captured before restic started. It is recorded, not
+  recomputed: the staging tree has moved on since, and the point of these rows is
+  to say what was actually read.
+</p>
+{{if $.Body.SourceStates}}
+<table>
+  <tr><th>Source</th><th>Staging state version</th><th>Published</th><th>Path read</th><th>Captured</th></tr>
+  {{range $.Body.SourceStates}}
+  <tr>
+    <td>{{if .Name}}{{.Name}}{{else}}<span class="mono">{{.State.SourceID}}</span>{{end}}</td>
+    <td>{{.State.StagingStateVersion}}</td>
+    <td>{{timestamp .State.PublishedAt}}</td>
+    <td class="mono">{{.State.CurrentRelativePath}}</td>
+    <td>{{timestamp .State.CapturedAt}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p class="muted">No read-set was captured; the run did not get that far.</p>
+{{end}}
+
+<h3>Revision batches included</h3>
+{{if $.Body.Batches}}
+<table>
+  <tr><th>Batch</th><th>Source</th><th>Path</th><th>Batch created</th></tr>
+  {{range $.Body.Batches}}
+  <tr>
+    <td class="mono">{{shortID .RevisionBatchID}}</td>
+    <td class="mono">{{shortID .SourceID}}</td>
+    <td class="mono">{{.RelativePath}}</td>
+    <td>{{timestamp .BatchCreatedAt}}</td>
+  </tr>
+  {{end}}
+</table>
+<p class="muted">
+  These batches are marked as covered only if this run reached a proven durable
+  success, or a later recovery confirmed its snapshot.
+</p>
+{{else}}
+<p class="muted">No revision batches were included in this run.</p>
+{{end}}
+{{end}}
+
 {{if eq .Run.Kind "COLLECTION"}}
 <h2>Revision batch</h2>
 {{with .Batch}}

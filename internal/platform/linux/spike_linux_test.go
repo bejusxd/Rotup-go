@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -268,6 +269,25 @@ func TestSpikeIdentitySurvivesADeviceNodeChange(t *testing.T) {
 	if matches[0].DevicePath != secondDevice {
 		t.Fatalf("device path = %q, want the current node %q", matches[0].DevicePath, secondDevice)
 	}
+	// Prove that the privileged path re-resolves too, not just discovery.
+	manager := NewMountManager(helperPath(t), process.NewRunner())
+	diskID, err := domain.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Unmount(context.Background(), diskID) })
+	result, err := manager.Mount(context.Background(), ports.MountRequest{
+		DiskID: diskID, FilesystemUUID: image.uuid, FilesystemType: "ext4",
+	})
+	if err != nil || !result.Mounted || result.ResolvedDevice != secondDevice || result.FilesystemUUID != image.uuid {
+		t.Fatalf("mount after node change = %#v, %v", result, err)
+	}
+	if err := manager.Sync(context.Background(), diskID); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Unmount(context.Background(), diskID); err != nil {
+		t.Fatal(err)
+	}
 	t.Logf("SPIKE: UUID %s resolved across a device node change from %s to %s",
 		image.uuid, firstDevice, secondDevice)
 }
@@ -399,6 +419,80 @@ func TestSpikeWrongIdentityIsRefused(t *testing.T) {
 	point, _ := media.MountPointFor(diskID)
 	if _, statErr := os.Stat(point); statErr == nil {
 		t.Fatal("a refused mount must not leave a mount point behind")
+	}
+}
+
+func TestSpikeDuplicateIdentityIsRefusedBeforeMount(t *testing.T) {
+	requireSpike(t)
+	image := newLoopImage(t, 64)
+	// Both mappings are unmounted and are never written through. They expose
+	// the same UUID simultaneously, which must not authorize either mount.
+	duplicate := &loopImage{t: t, path: image.path, uuid: image.uuid,
+		device: run(t, "losetup", "--find", "--show", image.path)}
+	t.Cleanup(duplicate.detach)
+	enumerator := spikeEnumerator(t)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, err := enumerator.ResolveFilesystem(context.Background(), image.uuid)
+		var typed *domain.Error
+		if domain.AsError(err, &typed) && typed.Code == "ambiguous_identity" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("duplicate fixture never became observable: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	manager := NewMountManager(helperPath(t), process.NewRunner())
+	diskID, err := domain.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Unmount(context.Background(), diskID) })
+	_, err = manager.Mount(context.Background(), ports.MountRequest{
+		DiskID: diskID, FilesystemUUID: image.uuid, FilesystemType: "ext4",
+	})
+	var typed *domain.Error
+	if !domain.AsError(err, &typed) || typed.Code != "mount_helper_ambiguous_identity" {
+		t.Fatalf("ambiguous mount = %v, want mount_helper_ambiguous_identity", err)
+	}
+	point, _ := media.MountPointFor(diskID)
+	if _, err := os.Stat(point); !os.IsNotExist(err) {
+		t.Fatalf("ambiguous identity left a mount point: %v", err)
+	}
+}
+
+func TestSpikeHelperRefusesUnprivilegedCaller(t *testing.T) {
+	requireSpike(t)
+	// A separately traversable directory lets the unprivileged child execute
+	// the helper even when the Go test's own temporary parent is root-only.
+	dir, err := os.MkdirTemp("", "rotup-helper-unprivileged-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(helperPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "rotup-mounthelper")
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(path, "mount", "--disk-id", "11111111-2222-4333-8444-555555555555",
+		"--fs-uuid", "deadbeef-dead-beef-dead-beefdeadbeef", "--fstype", "ext4")
+	cmd.Env = []string{}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 65534, Gid: 65534}}
+	output, err := cmd.Output()
+	if err == nil {
+		t.Fatal("unprivileged helper invocation unexpectedly succeeded")
+	}
+	var result media.Result
+	if err := json.Unmarshal(output, &result); err != nil || result.OK || result.ErrorCode != "privilege_required" {
+		t.Fatalf("unprivileged result = %s, parse error = %v", output, err)
 	}
 }
 

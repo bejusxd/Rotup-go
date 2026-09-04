@@ -1,14 +1,16 @@
 # ROTUP
 
-ROTUP is at the M3 milestone. An administrator can configure an SMB source with
+ROTUP includes the M4 manual-backup implementation; the real SMB-to-USB acceptance
+drill is still pending. An administrator can configure an SMB source with
 a protected credential, run a manual connection test, run a manual collection
 through rclone into the staging layout, and inspect the resulting runs, metrics,
 revision batches and staged files. They can also see the removable media the
 system currently presents, register a backup disk by its filesystem UUID, and
-mount, verify, flush and unmount it explicitly.
+mount, verify, flush and unmount it explicitly. Repository setup, manual
+BACKUP_LATEST runs and explicit interrupted-backup recovery are available.
 
-restic, backup repositories, scheduling, rotation, email and retention are later
-milestones and are deliberately not implemented.
+Scheduling, rotation, email and retention are later milestones and are
+deliberately not implemented.
 
 ## Run locally
 
@@ -27,7 +29,9 @@ The dashboard listens on `http://127.0.0.1:8080` by default.
 | `ROTUP_STAGING_ROOT` | `./rotup-staging` | Root of the ROTUP-owned staging layout |
 | `ROTUP_SECRET_ROOT` | `./rotup-secrets` | Service-owned directory holding secret material |
 | `ROTUP_RCLONE_PATH` | discovered on `PATH` | Explicit path to the rclone executable |
+| `ROTUP_RESTIC_PATH` | discovered on `PATH` | Explicit path to restic (validated with 0.17.3) |
 | `ROTUP_COLLECTION_TIMEOUT` | `2h` | Time limit for one collection transfer |
+| `ROTUP_BACKUP_TIMEOUT` | `6h` | Time limit for one restic backup subprocess |
 | `ROTUP_LSBLK_PATH` | `/usr/bin/lsblk` | Explicit path to the block-device listing tool (Linux) |
 | `ROTUP_MOUNT_HELPER` | unset | Explicit path to the privileged mount helper (Linux) |
 | `ROTUP_MEDIA_POLL_INTERVAL` | `15s` | How often removable media is re-enumerated |
@@ -42,7 +46,9 @@ daemon falls back to the inherited `PATH` as a development convenience and logs
 a warning. Without an rclone binary the daemon still starts and the UI still
 works; connection tests and collections report that the engine is unavailable.
 
-ROTUP never downloads or installs rclone.
+Configure `ROTUP_RESTIC_PATH` explicitly in production too. Without restic the
+daemon and collection UI still work; repository actions report the missing
+engine. ROTUP never downloads or installs rclone or restic.
 
 ## What the UI offers
 
@@ -54,6 +60,9 @@ ROTUP never downloads or installs rclone.
 - **Disks** (`/disks`) — observed removable media, explicit registration, and
   the mount, verify, flush and unmount lifecycle. Unknown media is observe-only.
 - **History** (`/runs`) — every durable run plus the operational event log.
+- **Repositories** (`/repositories`) — explicit initialize/adopt after password
+  escrow acknowledgement, manual backup, repository health and recovery. Backup
+  history includes the exact staging read-set and revision coverage.
 - **Health** (`/healthz`) — JSON health for the daemon and database.
 
 Manual runs execute in the daemon, not in the HTTP request. Starting one
@@ -115,6 +124,7 @@ passed. In particular:
 go test ./...
 go vet ./...
 go build ./cmd/rotupd
+go build ./cmd/rotup-mounthelper
 ```
 
 No SMB server, no rclone binary, no root, no Linux and no removable hardware are
@@ -143,3 +153,15 @@ It uses a local directory as the source, because the properties under test
 (`copy`, `sync`, `--backup-dir`, `--delete-after`, the JSON statistics, and the
 password obfuscation format) are backend-independent. SMB-specific behaviour
 still needs a real share on the Linux target.
+
+### restic adapter and service spikes
+
+```sh
+ROTUP_RESTIC_SPIKE=1 ROTUP_RESTIC_PATH=/absolute/path/to/restic \
+  go test ./internal/adapters/restic ./internal/backup -run Spike -count=1 -v
+```
+
+These use real restic and temporary repositories. The service spike uses fake
+media; it does not claim to validate USB hardware or an SMB source. See
+[M4 operations and acceptance](docs/operations/m4-backup.md) for the success
+boundary, recovery limits and the remaining manual drill.

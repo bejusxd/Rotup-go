@@ -31,6 +31,14 @@ const (
 	// DiskReady means the disk is mounted at its ROTUP mount point and its
 	// identity was proven after mounting.
 	DiskReady DiskStatus = "READY"
+	// DiskBackupRunning means a BACKUP_LATEST run is writing to this disk's
+	// repository.
+	DiskBackupRunning DiskStatus = "BACKUP_RUNNING"
+	// DiskVerifying means a non-destructive repository verification is running.
+	DiskVerifying DiskStatus = "VERIFYING"
+	// DiskMaintenanceRunning means a repository maintenance operation is
+	// running. Nothing in v1 reaches it yet; retention arrives with M8.
+	DiskMaintenanceRunning DiskStatus = "MAINTENANCE_RUNNING"
 	// DiskSyncing means a filesystem flush is in progress.
 	DiskSyncing DiskStatus = "SYNCING"
 	// DiskUnmounting means the unmount is in progress.
@@ -48,7 +56,8 @@ const (
 // reconciliation underneath it.
 func (s DiskStatus) Busy() bool {
 	switch s {
-	case DiskValidating, DiskMounting, DiskSyncing, DiskUnmounting:
+	case DiskValidating, DiskMounting, DiskSyncing, DiskUnmounting,
+		DiskBackupRunning, DiskVerifying, DiskMaintenanceRunning:
 		return true
 	default:
 		return false
@@ -56,7 +65,16 @@ func (s DiskStatus) Busy() bool {
 }
 
 // Mounted reports whether ROTUP believes its own mount is currently in place.
-func (s DiskStatus) Mounted() bool { return s == DiskReady }
+// Every status in which a repository operation is running implies the mount is
+// still there, because those operations are the reason it was mounted.
+func (s DiskStatus) Mounted() bool {
+	switch s {
+	case DiskReady, DiskBackupRunning, DiskVerifying, DiskMaintenanceRunning:
+		return true
+	default:
+		return false
+	}
+}
 
 // Error codes recorded on a disk. They are stable and administrator-facing.
 const (

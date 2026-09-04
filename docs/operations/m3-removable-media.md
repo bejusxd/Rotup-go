@@ -109,9 +109,15 @@ Install the helper with the privilege it needs and nothing more. Either:
 
 ```sh
 # Recommended: a narrow sudo rule, helper not setuid.
+install -d -o root -g root -m 0755 /usr/libexec
 install -o root -g root -m 0755 rotup-mounthelper /usr/libexec/rotup-mounthelper
+install -o root -g root -m 0755 scripts/rotup-mounthelper-sudo /usr/libexec/rotup-mounthelper-sudo
 echo 'rotup ALL=(root) NOPASSWD: /usr/libexec/rotup-mounthelper' \
   > /etc/sudoers.d/rotup-mounthelper
+chmod 0440 /etc/sudoers.d/rotup-mounthelper
+visudo -cf /etc/sudoers.d/rotup-mounthelper
+# Set this for the unprivileged daemon, NOT the unelevated helper binary:
+export ROTUP_MOUNT_HELPER=/usr/libexec/rotup-mounthelper-sudo
 ```
 
 or:
@@ -123,6 +129,42 @@ install -o root -g rotup -m 4750 rotup-mounthelper /usr/libexec/rotup-mounthelpe
 
 Either way the helper's own validation is what makes it safe, not the
 invocation mechanism.
+
+Run installation commands as root and substitute the actual service account
+for `rotup` in the sudo rule. The wrapper uses noninteractive sudo and a fixed
+helper path, forwarding the validated argument array unchanged. Never authorize
+sudo execution of a helper inside a service-writable checkout. An ordinary
+`go build` binary is not privileged, including one under WSL's `/mnt/c`.
+Pointing the daemon directly at that binary now reports
+`CONFIGURATION / mount_helper_privilege_required`, not missing media. Installing
+only a sudo rule does not elevate a direct executable invocation.
+
+### Service access to the mount and repository directories
+
+The daemon and restic stay unprivileged. The mount-root ancestors must be
+root-owned and traversable by the service group. Provision them at boot:
+
+```sh
+install -d -o root -g rotup -m 0750 /run/rotup /run/rotup/media
+```
+
+On freshly formatted ext4 media, the filesystem root is normally root-owned.
+After the helper mounts and verifies an explicitly registered disk, provision
+only its application directory for the service account (not the device node or
+the whole filesystem):
+
+```sh
+sudo /usr/libexec/rotup-mounthelper mount --disk-id <registered-disk-id> \
+  --fs-uuid <registered-filesystem-uuid> --fstype ext4
+# On a new disk only; do not change ownership of an existing repository blindly.
+sudo install -d -o rotup -g rotup -m 0750 /run/rotup/media/<registered-disk-id>/rotup
+sudo /usr/libexec/rotup-mounthelper sync --disk-id <registered-disk-id>
+sudo /usr/libexec/rotup-mounthelper unmount --disk-id <registered-disk-id>
+```
+
+Do not add the daemon to the `disk` group or make block devices world-readable
+to fix a helper privilege error. That would grant direct access to unrelated
+host disks. These requirements apply to native Linux and WSL alike.
 
 ## Configuration
 

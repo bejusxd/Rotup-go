@@ -18,7 +18,27 @@ const (
 	RunKindConnectionTest RunKind = "CONNECTION_TEST"
 	// RunKindCollection is a source collection into staging.
 	RunKindCollection RunKind = "COLLECTION"
+	// RunKindDiskSetup is an explicit restic repository initialization or
+	// adoption on one registered disk.
+	RunKindDiskSetup RunKind = "DISK_SETUP"
+	// RunKindBackupLatest is a snapshot of whatever stable staging state is
+	// current when the run acquires the staging barrier.
+	RunKindBackupLatest RunKind = "BACKUP_LATEST"
+	// RunKindVerify is a non-destructive repository verification, used by the
+	// explicit recovery workflow.
+	RunKindVerify RunKind = "VERIFY"
 )
+
+// TouchesRepository reports whether a run kind operates on a restic repository.
+// Startup recovery uses it to decide which unfinished runs it owns.
+func (k RunKind) TouchesRepository() bool {
+	switch k {
+	case RunKindDiskSetup, RunKindBackupLatest, RunKindVerify:
+		return true
+	default:
+		return false
+	}
+}
 
 // RunTrigger records why a run exists. M2 has no scheduler, so runs are either
 // requested by an administrator or created by startup recovery.
@@ -127,15 +147,16 @@ const (
 
 // Event is an append-only administrator-facing operational fact.
 type Event struct {
-	ID          int64
-	OccurredAt  time.Time
-	Severity    string
-	EventType   string
-	Component   string
-	SourceID    string
-	DiskID      string
-	RunID       string
-	PayloadJSON string
+	ID           int64
+	OccurredAt   time.Time
+	Severity     string
+	EventType    string
+	Component    string
+	SourceID     string
+	DiskID       string
+	RepositoryID string
+	RunID        string
+	PayloadJSON  string
 }
 
 // NewID returns a random UUID suitable for durable identifiers.
