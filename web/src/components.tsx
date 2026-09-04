@@ -66,28 +66,62 @@ export const label = (value: string) =>
     .replaceAll("_", " ")
     .toLowerCase()
     .replace(/^./, (c) => c.toUpperCase());
-export const date = (value: Timestamp) =>
-  value
-    ? new Date(value).toLocaleString(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      })
-    : "Not recorded";
-export const bytes = (value: number) =>
-  value > 0
-    ? new Intl.NumberFormat(undefined, {
-        style: "unit",
-        unit: "gigabyte",
-        maximumFractionDigits: 1,
-      }).format(value / 1e9)
-    : "Not available";
+export const date = (value: Timestamp) => {
+  if (!value) return "Not recorded";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Not recorded";
+  return parsed.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+};
+// Disk sizes come from the platform in bytes and span megabytes to terabytes.
+// Reporting every one of them in gigabytes turned a 374 MB volume into
+// "0.4 GB", which an operator cannot use to tell two disks apart.
+const sizeUnits = [
+  "byte",
+  "kilobyte",
+  "megabyte",
+  "gigabyte",
+  "terabyte",
+  "petabyte",
+] as const;
+export function bytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "Not available";
+  let scaled = value;
+  let unit = 0;
+  while (scaled >= 1000 && unit < sizeUnits.length - 1) {
+    scaled /= 1000;
+    unit += 1;
+  }
+  return new Intl.NumberFormat(undefined, {
+    style: "unit",
+    unit: sizeUnits[unit],
+    unitDisplay: "short",
+    maximumFractionDigits: unit === 0 || scaled >= 100 ? 0 : 1,
+  }).format(scaled);
+}
+// A backup can run for hours. Seconds with one decimal is unreadable past a
+// minute, so switch units instead of printing "7203.4 s".
+export function duration(ms: number) {
+  if (!Number.isFinite(ms) || ms < 0) return "Not recorded";
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${(ms / 1000).toFixed(1)} s`;
+  if (seconds < 3600)
+    return `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+  return `${Math.floor(seconds / 3600)} h ${Math.floor((seconds % 3600) / 60)} min`;
+}
 
 export function StatusBadge({ value }: { value: string }) {
   const good = [
     "STABLE",
     "AVAILABLE_UNMOUNTED",
     "SUCCEEDED",
+    "SUCCEEDED_WITH_WARNING",
     "HEALTHY",
+    "READY",
+    "SAFE_TO_REMOVE",
     "running",
     "ok",
   ].includes(value);
@@ -282,14 +316,18 @@ export function ConfirmDialog({
 export function RunList({
   runs,
   sources = {},
+  emptyTitle = "No activity recorded",
+  emptyBody = "Your connection tests, collections and backups will appear here.",
 }: {
   runs: Run[];
   sources?: Record<string, string>;
+  emptyTitle?: string;
+  emptyBody?: string;
 }) {
   if (!runs.length)
     return (
-      <EmptyState title="No activity recorded">
-        <p>Your connection tests, collections and backups will appear here.</p>
+      <EmptyState title={emptyTitle}>
+        <p>{emptyBody}</p>
       </EmptyState>
     );
   return (
@@ -317,16 +355,17 @@ export function RunList({
                 <StatusBadge value={run.status} />
               </td>
               <td>
-                {sources[run.sourceId] ||
-                  (run.sourceId ? (
-                    <Link to={`/sources/${run.sourceId}`}>View source</Link>
-                  ) : run.repositoryId ? (
-                    <Link to={`/repositories/${run.repositoryId}`}>
-                      Backup storage
-                    </Link>
-                  ) : (
-                    "—"
-                  ))}
+                {run.sourceId ? (
+                  <Link to={`/sources/${run.sourceId}`}>
+                    {sources[run.sourceId] || "View source"}
+                  </Link>
+                ) : run.repositoryId ? (
+                  <Link to={`/repositories/${run.repositoryId}`}>
+                    Backup storage
+                  </Link>
+                ) : (
+                  "—"
+                )}
               </td>
               <td>
                 {date(run.startedAt ?? run.requestedAt)}
@@ -334,11 +373,7 @@ export function RunList({
                   <small>Finished {date(run.finishedAt)}</small>
                 )}
               </td>
-              <td>
-                {run.terminal
-                  ? `${(run.durationMs / 1000).toFixed(1)} s`
-                  : "In progress"}
-              </td>
+              <td>{run.terminal ? duration(run.durationMs) : "In progress"}</td>
             </tr>
           ))}
         </tbody>

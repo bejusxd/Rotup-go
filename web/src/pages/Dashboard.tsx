@@ -81,8 +81,12 @@ export function DashboardPage() {
         title="Overview"
         description="Your sources, local copies and backup disks — in one place."
       >
-        <button className="secondary" onClick={query.reload}>
-          Refresh
+        <button
+          className="secondary"
+          disabled={query.refreshing}
+          onClick={query.reload}
+        >
+          {query.refreshing ? "Refreshing…" : "Refresh"}
         </button>
         <Link className="button" to={next?.href ?? "/repositories"}>
           {!data.sources.length

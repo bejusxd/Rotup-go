@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import {
+  bytes,
+  duration,
   ErrorAlert,
   StatusBadge,
   SystemContext,
@@ -62,4 +64,21 @@ describe("operations presentation", () => {
       expect(screen.getByText("state-version-42")).toBeInTheDocument();
     },
   );
+});
+
+describe("operator-readable magnitudes", () => {
+  it("scales a disk capacity to the unit an operator can compare", () => {
+    // The platform reports bytes; every size used to be printed in gigabytes,
+    // so a 374 MB volume and a 167 MB volume both read as "0.x GB".
+    expect(bytes(374251520)).toMatch(/^374\s*MB$/);
+    expect(bytes(167149568)).toMatch(/^167\s*MB$/);
+    expect(bytes(1099511627776)).toMatch(/^1[.,]1\s*TB$/);
+    expect(bytes(0)).toBe("Not available");
+  });
+  it("keeps a long run duration readable instead of printing raw seconds", () => {
+    expect(duration(139)).toBe("139 ms");
+    expect(duration(8845)).toBe("8.8 s");
+    expect(duration(134000)).toBe("2 min 14 s");
+    expect(duration(7203400)).toBe("2 h 0 min");
+  });
 });

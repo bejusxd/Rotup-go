@@ -26,7 +26,9 @@ function DebugStatusPage() {
         title="Diagnostics"
         description="Allowlisted backend state. No passwords, secret contents or credential locators."
       >
-        <button onClick={query.reload}>Refresh</button>
+        <button disabled={query.refreshing} onClick={query.reload}>
+          {query.refreshing ? "Refreshing…" : "Refresh"}
+        </button>
       </PageHeader>
       {query.loading ? (
         <LoadingState />

@@ -107,6 +107,7 @@ describe("backup success presentation", () => {
       data,
       loading: false,
       reload: vi.fn(),
+      refreshing: false,
       path: "",
     });
     render(
@@ -126,6 +127,7 @@ describe("backend-owned storage safety", () => {
     vi.mocked(useQuery).mockReturnValue({
       loading: false,
       path: "",
+      refreshing: false,
       reload: vi.fn(),
       data: {
         applicationStatus: "running",
@@ -162,6 +164,7 @@ describe("backend-owned storage safety", () => {
     vi.mocked(useQuery).mockReturnValue({
       loading: false,
       path: "",
+      refreshing: false,
       reload: vi.fn(),
       data: {
         repository: {
@@ -199,6 +202,7 @@ describe("backend-owned storage safety", () => {
     vi.mocked(useQuery).mockImplementation((path) => ({
       loading: false,
       path,
+      refreshing: false,
       reload: vi.fn(),
       data:
         path === "/disks"

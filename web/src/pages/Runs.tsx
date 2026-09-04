@@ -5,6 +5,7 @@ import type { Run, RunDetail, Source } from "../api/types";
 import {
   Alert,
   date,
+  duration,
   ErrorAlert,
   JsonDetails,
   label,
@@ -24,8 +25,12 @@ export function RunsPage() {
         title="History"
         description="Recorded results, including failed and interrupted operations."
       >
-        <button className="secondary" onClick={query.reload}>
-          Refresh
+        <button
+          className="secondary"
+          disabled={query.refreshing}
+          onClick={query.reload}
+        >
+          {query.refreshing ? "Refreshing…" : "Refresh"}
         </button>
       </PageHeader>
       {!!sourceQuery.error && <ErrorAlert error={sourceQuery.error} />}
@@ -123,11 +128,7 @@ export function RunPage() {
           <dt>Finished</dt>
           <dd>{date(run.finishedAt)}</dd>
           <dt>Duration</dt>
-          <dd>
-            {run.terminal
-              ? `${(run.durationMs / 1000).toFixed(1)} seconds`
-              : "In progress"}
-          </dd>
+          <dd>{run.terminal ? duration(run.durationMs) : "In progress"}</dd>
         </dl>
         {backup && !backup.durableSuccessAt && (
           <Alert>

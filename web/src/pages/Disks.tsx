@@ -26,8 +26,12 @@ export function DisksPage() {
         title="Disks"
         description="Registered backup disks stay unmounted while idle."
       >
-        <button className="secondary" onClick={query.reload}>
-          Refresh discovery
+        <button
+          className="secondary"
+          disabled={query.refreshing}
+          onClick={query.reload}
+        >
+          {query.refreshing ? "Refreshing…" : "Refresh discovery"}
         </button>
       </PageHeader>
       {query.loading ? (
