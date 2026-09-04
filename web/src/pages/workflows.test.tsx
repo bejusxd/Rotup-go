@@ -243,6 +243,43 @@ describe("backend-owned storage safety", () => {
     );
     expect(mutate).not.toHaveBeenCalled();
   });
+  it("asks which disk the storage belongs to before asking for its password", () => {
+    vi.mocked(useQuery).mockImplementation((path) => ({
+      loading: false,
+      path,
+      refreshing: false,
+      reload: vi.fn(),
+      data:
+        path === "/disks"
+          ? {
+              disks: [
+                {
+                  id: "disk-1",
+                  name: "Disk A",
+                  registered: true,
+                  observed: true,
+                },
+              ],
+              enumerationError: "",
+            }
+          : { repositories: [] },
+    }));
+    render(
+      <MemoryRouter initialEntries={["/repositories/new"]}>
+        <SystemContext.Provider
+          value={{ minimumRepositoryPasswordLength: 12 } as System}
+        >
+          <RepositorySetupPage />
+        </SystemContext.Provider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByLabelText("Backup disk")).toBeVisible();
+    expect(
+      screen.queryByLabelText("New repository password"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(mutate).not.toHaveBeenCalled();
+  });
   it("does not fetch debug data when development mode is disabled", () => {
     render(
       <SystemContext.Provider value={{ devMode: false } as System}>

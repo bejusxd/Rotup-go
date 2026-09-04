@@ -347,7 +347,14 @@ export function RepositorySetupPage() {
                   ))}
               </select>
             </label>
-            {existing?.established ? (
+            {!diskId ? (
+              // Asking for a repository password before the operator has said
+              // which disk it belongs to invites entering the wrong one.
+              <p className="muted">
+                Choose the disk this backup storage belongs to. Preparation
+                details appear once a disk is selected.
+              </p>
+            ) : existing?.established ? (
               <Alert tone="info">
                 This disk already has prepared backup storage.{" "}
                 <Link to={`/repositories/${existing.id}`}>Open storage</Link>
@@ -415,13 +422,14 @@ export function RepositorySetupPage() {
                 </ActionButton>
                 {!selectedDisk?.observed && (
                   <p className="muted small">
-                    Choose a connected disk to continue.
+                    This disk is not connected. Connect it, then refresh this
+                    page to continue.
                   </p>
                 )}
               </>
             )}
           </form>
-          {reviewed && !existing?.established && (
+          {reviewed && !!diskId && !existing?.established && (
             <div className="form-actions">
               <ConfirmDialog
                 title="Confirm backup storage preparation"
