@@ -74,9 +74,28 @@ also holds Vite's native module open while Vite runs, so stop it before `npm ci`
 No extra permission or elevated daemon is needed. The install lockfile was
 verified with Node 24/npm; WSL Go builds consume the same platform-neutral dist.
 
+### Setup and onboarding
+
+Installation, the `rotupd setup` and `rotupd doctor` commands, and everything
+they provision are documented in [installation.md](installation.md). Two points
+matter for UI development:
+
+- Onboarding truth is derived in Go and served by `GET /api/v1/setup`. The
+  browser renders those steps and never recomputes them; the dashboard reads
+  the same endpoint, so the two views cannot disagree. Adding a step means
+  changing `internal/web/api_setup.go`, not the React page.
+- System provisioning is deliberately unreachable over HTTP. `/setup` reports
+  host findings from the same read-only inspection as `rotupd doctor` and
+  points at the command; it never offers to run it.
+
+A development daemon started from a repository checkout will report warnings
+about `/var/lib/rotup` and `/run/rotup`, because it is configured with the
+repository-local paths instead. That is correct: doctor and the setup API check
+the paths the daemon is actually configured with and say so.
+
 ### Routes
 
-React: `/`, `/sources`, `/sources/new`, `/sources/:id`, `/sources/:id/edit`,
+React: `/`, `/setup`, `/sources`, `/sources/new`, `/sources/:id`, `/sources/:id/edit`,
 `/disks`, `/disks/:id`, `/repositories`, `/repositories/new`,
 `/repositories/:id`, `/runs`, `/runs/:id`, `/debug` (development only).
 The old staging browser, event log and revision coverage diagnostics remain

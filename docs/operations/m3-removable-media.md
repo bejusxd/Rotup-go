@@ -98,6 +98,10 @@ resolves the ambiguity by device order, insertion order, or first result.
 
 ## Installation
 
+`rotupd setup` now performs everything in this section, idempotently, and
+`rotupd doctor` verifies it. See [installation.md](installation.md); the manual
+steps below remain accurate and are what setup automates.
+
 Build both binaries:
 
 ```sh
