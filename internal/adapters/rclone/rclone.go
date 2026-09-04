@@ -129,14 +129,9 @@ func (e *Engine) TestConnection(ctx context.Context, spec ports.SourceSpec, cred
 		runCtx, cancel := context.WithTimeout(ctx, e.cfg.ConnectionTimeout)
 		defer cancel()
 
-		args := []string{"lsjson", "--max-depth", "1"}
-		args = append(args, session.commonArgs()...)
-		args = append(args, filterArgs(spec)...)
-		args = append(args, session.remotePath())
-
 		process := e.runner.Run(runCtx, ports.CommandSpec{
 			Path:            e.cfg.ExecutablePath,
-			Args:            args,
+			Args:            connectionArgs(spec, session),
 			Env:             minimalEnvironment(),
 			StdoutTailLimit: listingTailLimit,
 			StderrTailLimit: defaultOutputTailLimit,
@@ -157,6 +152,15 @@ func (e *Engine) TestConnection(ctx context.Context, spec ports.SourceSpec, cred
 		return nil
 	})
 	return result, err
+}
+
+// connectionArgs is shared with the real-binary spike so it exercises every
+// production flag, including logging, cache and filter options.
+func connectionArgs(spec ports.SourceSpec, session *session) []string {
+	args := []string{"lsjson", "--max-depth", "1"}
+	args = append(args, session.commonArgs()...)
+	args = append(args, filterArgs(spec)...)
+	return append(args, session.remotePath())
 }
 
 // Measure enumerates the source without writing anything. Its count is what the

@@ -34,6 +34,8 @@ var authenticationMarkers = []string{
 	"nt_status_wrong_password",
 	"logon failure",
 	"authentication failed",
+	// SMB's decoded logon failure can be returned by lsjson with exit code 1.
+	"the attempted logon is invalid",
 	"permission denied",
 	"access denied",
 	"unauthorized",
@@ -91,6 +93,12 @@ func classify(operation string, result ports.ProcessResult, text string) *domain
 	}
 
 	lowered := strings.ToLower(text)
+	// The flag parser can exit 2 rather than rclone's documented syntax
+	// code. Keep a positively identified invalid invocation an invariant error.
+	if strings.HasPrefix(lowered, "error: unknown flag:") {
+		return domain.NewError(domain.ErrClassInvariant, "rclone_usage_error",
+			operation+" was rejected by rclone as a usage error; this is a ROTUP defect")
+	}
 	if containsAny(lowered, capacityMarkers) {
 		return domain.NewError(domain.ErrClassCapacity, "rclone_no_space",
 			operation+" stopped because the destination filesystem is full")

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -415,6 +416,41 @@ func TestTestConnectionCountsListedEntries(t *testing.T) {
 	}
 }
 
+// Captured from rclone 1.75.0 against Samba with no saved SMB credential.
+// lsjson exits 1 for this authentication failure, not just for invalid flags.
+const smbInvalidLogonDiagnostic = `{"level":"error","msg":"error listing: couldn't connect SMB: response error: The attempted logon is invalid. This is either due to a bad username or authentication information."}`
+
+func TestTestConnectionInvalidSMBLogonWithProductionArguments(t *testing.T) {
+	t.Parallel()
+	runner := &recordingRunner{result: ports.ProcessResult{
+		Started: true, Exited: true, ExitCode: 1,
+		Stderr: []byte(smbInvalidLogonDiagnostic),
+	}}
+	engine := newTestEngine(t, runner, "")
+	_, err := engine.TestConnection(context.Background(), ports.SourceSpec{
+		Host: "localhost", Share: "rotup-test", Username: "bejo",
+	}, ports.CredentialHandle{})
+
+	call := runner.lastCall(t)
+	configPath := configPathFrom(call.Args)
+	want := []string{
+		"lsjson", "--max-depth", "1",
+		"--config", configPath, "--cache-dir", filepath.Dir(configPath),
+		"--use-json-log", "--log-level", "NOTICE", "--stats-log-level", "NOTICE", "--stats", "1m",
+		"rotup_source:rotup-test",
+	}
+	if !slices.Equal(call.Args, want) {
+		t.Fatalf("connection argv = %q, want %q", call.Args, want)
+	}
+	if len(runner.configs) != 1 || runner.configs[0] != "[rotup_source]\ntype = smb\nhost = localhost\nuser = bejo\n" {
+		t.Fatal("expected the temporary SMB config without a saved password")
+	}
+	var failure *domain.Error
+	if !domain.AsError(err, &failure) || failure.Class != domain.ErrClassAuthentication || failure.Code != "rclone_authentication_failed" {
+		t.Fatalf("invalid SMB logon = %v, want AUTHENTICATION/rclone_authentication_failed", err)
+	}
+}
+
 func TestProbeParsesTheVersion(t *testing.T) {
 	t.Parallel()
 
@@ -487,6 +523,8 @@ func TestClassifyMapsExitStatusAndOutput(t *testing.T) {
 		{"full disk", exited(2), "write error: no space left on device", domain.ErrClassCapacity, "rclone_no_space"},
 		{"temporary", exited(5), "", domain.ErrClassUnavailable, "rclone_temporary_error"},
 		{"usage", exited(1), "", domain.ErrClassInvariant, "rclone_usage_error"},
+		{"unknown flag", exited(1), "Error: unknown flag: --rotup-test-invalid-flag", domain.ErrClassInvariant, "rclone_usage_error"},
+		{"unknown flag exit 2", exited(2), "Error: unknown flag: --rotup-test-invalid-flag", domain.ErrClassInvariant, "rclone_usage_error"},
 		{"timeout", ports.ProcessResult{TimedOut: true}, "", domain.ErrClassTimeout, "rclone_timeout"},
 		{"canceled", ports.ProcessResult{Canceled: true}, "", domain.ErrClassCancellation, "rclone_canceled"},
 		{"could not start", ports.ProcessResult{Err: errors.New("no such file")}, "", domain.ErrClassExternalTool, "rclone_start_failed"},

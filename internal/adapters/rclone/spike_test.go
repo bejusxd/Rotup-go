@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bejusxd/rotup/internal/domain"
 	"github.com/bejusxd/rotup/internal/platform/process"
 	"github.com/bejusxd/rotup/internal/ports"
 )
@@ -27,11 +28,11 @@ import (
 // and optionally ROTUP_RCLONE_PATH=/path/to/rclone. The source side uses a
 // local directory rather than an SMB share: the properties under test are
 // rclone's own copy, sync, backup-dir and delete-after semantics, which are
-// backend-independent. SMB-specific behaviour still needs a real share and is
-// verified on the Linux target during deployment.
+// backend-independent. The separate SMB authentication spike below requires a
+// real share that rejects passwordless login for the supplied test username.
 //
-// Everything here uses the same pinned flag set that production builds, by
-// calling collectArgs and substituting only the source argument.
+// The collection and connection spikes use the production flag sets by calling
+// collectArgs/connectionArgs and substituting only the source argument.
 
 const spikeEnv = "ROTUP_RCLONE_SPIKE"
 
@@ -379,10 +380,12 @@ func TestSpikeListingProbeIsMachineReadable(t *testing.T) {
 	env := newSpikeEnvironment(t)
 	env.write(env.source, "a.txt", "A")
 	env.write(env.source, "nested/b.txt", "B")
+	args := connectionArgs(ports.SourceSpec{}, &session{configPath: env.config, cacheDir: env.work})
+	args[len(args)-1] = env.source
 
 	result := process.NewRunner().Run(context.Background(), ports.CommandSpec{
 		Path: env.binary,
-		Args: []string{"lsjson", "--max-depth", "1", "--config", env.config, env.source},
+		Args: args,
 		Env:  minimalEnvironment(),
 	})
 	if result.ExitCode != 0 {
@@ -395,6 +398,53 @@ func TestSpikeListingProbeIsMachineReadable(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("listed %d top-level entries, want 2", len(entries))
 	}
+}
+
+func TestSpikeConnectionUnknownFlagRemainsAUsageError(t *testing.T) {
+	env := newSpikeEnvironment(t)
+	args := connectionArgs(ports.SourceSpec{}, &session{configPath: env.config, cacheDir: env.work})
+	args[len(args)-1] = env.source
+	args = append(args, "--rotup-test-invalid-flag")
+	result := process.NewRunner().Run(context.Background(), ports.CommandSpec{
+		Path: env.binary, Args: args, Env: minimalEnvironment(),
+	})
+	if !result.Exited || result.ExitCode == 0 || !strings.HasPrefix(string(result.Stderr), "Error: unknown flag:") {
+		t.Fatalf("expected an actual usage failure, got exit %d: %s", result.ExitCode, result.Stderr)
+	}
+	failure := classify("the connection test", result, string(result.Stderr))
+	if failure == nil || failure.Class != domain.ErrClassInvariant || failure.Code != "rclone_usage_error" {
+		t.Fatalf("unknown flag = %v, want INVARIANT/rclone_usage_error", failure)
+	}
+}
+
+// Read-only reproduction of a configured SMB source with no stored credential.
+// Opt in only against a test account: this deliberately attempts passwordless
+// authentication, which the server must reject. Alongside ROTUP_RCLONE_SPIKE=1,
+// set ROTUP_RCLONE_SMB_AUTH_SPIKE=1 and ROTUP_RCLONE_SMB_HOST/SHARE/USER.
+// No password is read from the environment or passed on the command line.
+func TestSpikeSMBConnectionInvalidLogonIsNotAUsageError(t *testing.T) {
+	if os.Getenv("ROTUP_RCLONE_SMB_AUTH_SPIKE") == "" {
+		t.Skip("set ROTUP_RCLONE_SMB_AUTH_SPIKE=1 and SMB_HOST/SHARE/USER for the real SMB authentication spike")
+	}
+	if os.Getenv(spikeEnv) == "" {
+		t.Fatal("the SMB authentication spike also requires ROTUP_RCLONE_SPIKE=1")
+	}
+	required := func(name string) string {
+		t.Helper()
+		value := os.Getenv("ROTUP_RCLONE_SMB_" + name)
+		if value == "" {
+			t.Fatalf("ROTUP_RCLONE_SMB_%s must identify the test share/account", name)
+		}
+		return value
+	}
+	spec := ports.SourceSpec{Host: required("HOST"), Share: required("SHARE"), Username: required("USER")}
+	engine := New(Config{ExecutablePath: spikeBinary(t)}, process.NewRunner(), stubSecrets{}, tempRuntimes{base: t.TempDir()}, nil)
+	_, err := engine.TestConnection(context.Background(), spec, ports.CredentialHandle{})
+	var failure *domain.Error
+	if !domain.AsError(err, &failure) || failure.Class != domain.ErrClassAuthentication || failure.Code != "rclone_authentication_failed" {
+		t.Fatalf("passwordless SMB connection = %v, want AUTHENTICATION/rclone_authentication_failed", err)
+	}
+	t.Logf("SPIKE: real SMB rejection correctly classified as %s/%s", failure.Class, failure.Code)
 }
 
 // The statistics ROTUP relies on to decide whether a failed run may have
