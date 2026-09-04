@@ -9,10 +9,30 @@ staging barriers, UUID identity, setup/escrow, backup durability and recovery.
 
 The React migration is implemented: versioned API, explicit development mode,
 all requested page families, same-origin Vite development, embedded production
-assets and an intact `/legacy` interface. The sections below record historical
-checkpoints; their "remaining" lists describe that point in time, not current
-missing features. M4 real-media acceptance remains separate and is not declared
-complete by this UI work. No M5 work was started.
+assets and an intact `/legacy` interface. A product-quality review and polish
+pass over that UI is recorded in "Operator polish pass" below. The other
+sections record historical checkpoints; their "remaining" lists describe that
+point in time, not current missing features. M4 real-media acceptance remains
+separate and is not declared complete by this UI work. No M5 work was started.
+
+### Node is not installed on this workstation
+
+`node` and `npm` are not on PATH on Windows or in WSL, and `web/node_modules`
+was installed by an earlier session from a Windows host. Recent frontend work
+used a portable Node 24 unpacked into the session scratchpad rather than
+installing a toolchain:
+
+```sh
+# Download once, from WSL, into a scratch directory:
+curl -sSL -o node.zip https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-x64.zip
+# Then, from PowerShell, prepend the extracted directory to PATH:
+$env:Path = "<scratch>\node-v24.20.0-win-x64;$env:Path"
+```
+
+`node_modules` holds `@rolldown/binding-win32-x64-msvc`, so the Windows build
+is the one that matches the installed tree. Reinstalling from WSL would replace
+those native modules with Linux builds; the platform-neutral `web/dist` output
+is identical either way and is what the Go build embeds.
 
 ### Commands
 
@@ -91,11 +111,137 @@ under `/legacy`, linked from the SPA. Production debug API returns JSON 404.
 ### Next task
 
 Continue the existing M4 acceptance drill through the new UI with the intended
-test disk connected. Verify explicit setup/adoption on disposable storage,
+test disk connected. The polish pass below did not touch that drill. Verify explicit setup/adoption on disposable storage,
 manual backup durable success, interrupted/suspect recovery, and idle unmount.
 Keep the existing helper, UUID, staging and success-boundary checks unchanged.
 Do not initialize over the established repository, do not modify the architecture,
 and do not start M5. UI features are not blocked on that separate acceptance drill.
+
+## Operator polish pass
+
+A critical product-quality review of the React UI against real WSL data
+(one SMB source, one registered-but-disconnected disk with established
+storage, one recorded mount failure, four enumerated filesystems). No
+backup, staging, media-identity or repository semantics were changed, no
+safety invariant was weakened, `docs/ARCHITECTURE.md` was not touched, and
+the legacy interface is unchanged and still linked from every page footer.
+
+### Defects found and fixed
+
+1. Every disk size was printed in gigabytes, so a 374 MB volume, a 167 MB
+   volume and a 1 TB volume read as "0,4 GB", "0,2 GB" and "1099,5 GB".
+   Size is the only field that distinguishes unnamed filesystems, so this
+   removed the operator's ability to tell them apart. Sizes now scale.
+2. Run duration was always seconds with one decimal, unusable for a backup
+   measured in hours. It now switches to ms, seconds, minutes and hours.
+3. Re-reading a resource cleared its data first, so every "Refresh" button
+   and every reload after a mutation replaced the page with the loading
+   message and lost the operator's scroll position. `useQuery` now keeps
+   the previous values for the same path and exposes a `refreshing` flag,
+   which the refresh buttons use to prevent a second in-flight read.
+   Switching paths still shows nothing until the new resource answers, and
+   a failed read still clears stale healthy data.
+4. Unregisterable filesystems were refused with a generic sentence plus an
+   error code that is empty for the two cases an operator actually meets
+   (no filesystem UUID, unsupported filesystem type). The refusal now says
+   which condition applies and what to do.
+5. The disk page's only action always went to the storage preparation form,
+   which then reported that this disk already has prepared storage. It now
+   links straight to that storage when it exists.
+6. The dashboard's primary action read "Continue setup" and every checklist
+   step linked to a list page. Each step now names its action and links to
+   the page that performs it, and the final step asks for the disk to be
+   connected when it is not.
+7. The most recent recorded failure was rendered below the source and
+   storage panels, so the top of the page could read as untroubled. It is
+   now directly under the status summary, with the operation name and the
+   timestamp needed to judge whether it still applies.
+8. A backup run's detail page did not resolve the recorded repository and
+   disk that the run list already resolved, leaving no route back to the
+   storage the run wrote to. Fixed in `apiRun`; the history test asserts
+   that the list and the detail agree.
+9. Internal vocabulary appeared in normal prose: state versions, staging
+   paths, policies, run IDs, triggers, internal status values, restic
+   identity, filesystem UUIDs, "displaced/deleted". All of it moved into
+   technical details, which stays open in development mode; none of it was
+   removed, and each page still states the exact recorded values an audit
+   would quote.
+10. A failed run repeated its raw internal summary as the body of "Recorded
+    result", directly under an error alert explaining the same failure in
+    better words.
+11. A run detail page polled a finished run forever.
+12. Emptying an include/exclude rules box submitted one blank rule.
+13. The storage preparation form asked for a repository password and an
+    escrow acknowledgement before the operator had chosen a disk.
+14. The tool-unavailable alert named rclone and restic but never said which
+    one was missing; it now names the lost capability and keeps the engine
+    name, version and the backend's own detail in technical details.
+15. An unknown address and the disabled-diagnostics page had no level-one
+    heading and kept the previous page's document title.
+16. Diagnostics was a single JSON dump. It now leads with platform, both
+    engines with availability and reason, media-enumeration state and its
+    observation time, and a table pairing each filesystem UUID with the
+    device path, mount point, external mounts and lease state observed
+    right now. The raw allowlisted response is still printed underneath.
+
+### Deliberately not changed
+
+- Demo runs still appear in History and on the dashboard's recent activity.
+  They are real audit records; filtering them is a product decision, not a
+  presentation fix.
+- The disk list still offers every supported filesystem the platform
+  enumerates, including host system volumes under WSL. That is the media
+  layer's enumeration; the page warns to register only a disk the operator
+  recognises, and the backend still performs every registration check.
+- `apiRuns` still resolves each backup run's target with one query per run.
+  With history bounded to 100 runs and few of them backups, the N+1 is not
+  worth the risk of restructuring a read path.
+
+### Validation for this pass
+
+- Frontend: 23 tests, typecheck and production build passed with Node
+  24.20.0. Sources are Prettier-formatted. No lint command is configured.
+- Linux (WSL Ubuntu, Go 1.27): `gofmt -l ./internal ./cmd ./web` returned
+  no files, `go vet ./...` passed, `go test ./... -count=1` passed, and
+  both `rotupd` and `rotup-mounthelper` built.
+- `web/dist` was rebuilt from this source and the daemon rebuilt around it,
+  so a plain Go build serves this UI.
+- Browser, Vite development against the real WSL database with
+  `ROTUP_DEV_MODE=true`: overview, sources list/detail/new, disks
+  list/detail, backup storage list/detail/preparation, history, run detail
+  for a success and for a recorded mount failure, diagnostics, legacy
+  dashboard and legacy repositories, unknown-route fallback, and a real
+  connection test started from the UI (run
+  `06754369-d88e-4a05-9079-797c21df900e`, succeeded, page updated in place
+  and stopped polling when it finished). No console errors.
+- Browser, embedded production bundle with `ROTUP_DEV_MODE=false`:
+  Diagnostics is absent from navigation and `/debug` renders "Page not
+  found"; `GET /api/v1/debug/status` returns JSON 404; an unknown
+  `/api/v1/...` path returns JSON 404 rather than the SPA; a nested route
+  refreshes directly; `/healthz` unchanged; `/api/v1/disks` contains no
+  `devicePath`; technical details render collapsed. No console errors.
+- Narrow viewport: `documentElement.scrollWidth` equals `clientWidth` on
+  the overview, disks, diagnostics and repository detail pages at 485 px,
+  and no element in `main` extends past the viewport.
+- No destructive real-media operation was performed. Disk registration,
+  storage preparation, backup and recovery were exercised only through
+  their guards and unit tests. M4 real-media acceptance is unchanged and
+  must not be inferred from this pass.
+
+### Remaining UX debt
+
+- History has no filter, so development demo records sit above real
+  operations. A "hide demo records" toggle would be presentation-only, but
+  it is a product decision.
+- History and per-source activity are bounded to the latest 100 runs with
+  no pagination; older audit records exist and are unreachable from the UI.
+- The dashboard states that a durable backup completed somewhere, not
+  whether each source is covered. Per-source backup coverage would need a
+  read model that does not exist yet.
+- Nothing streams progress inside a long backup beyond its run status; the
+  orchestration phase is recorded but not surfaced as a progress view.
+- There is no keyboard shortcut layer and no focus trap of our own inside
+  the confirmation dialog beyond what the native `<dialog>` provides.
 
 ## Checkpoint 1: JSON API and development-mode foundation
 
