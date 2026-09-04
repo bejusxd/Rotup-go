@@ -19,6 +19,7 @@ export function RunPage() {
     {run.error && <ErrorAlert error={new RequestError(run.error, 0)} />}
     {run.kind === 'DEMO' && <Alert>This is a demonstration record, not a collection or backup.</Alert>}
     {run.kind === 'COLLECTION' && <Alert tone="info">Collection updates the local copy only. It does not create a backup on a rotated disk.</Alert>}
+    {run.repositoryId && <p><Link to={`/repositories/${run.repositoryId}`}>View associated backup storage →</Link></p>}
     <section className="panel"><h2>Recorded result</h2><p>{run.summary || (run.terminal ? 'No additional summary was recorded.' : 'Waiting for the operation result.')}</p><dl><dt>Source</dt><dd>{source ? <Link to={`/sources/${source.id}`}>{source.name}</Link> : 'Not a source-specific operation'}</dd>{backup && <><dt>Backup storage</dt><dd><Link to={`/repositories/${backup.repositoryId}`}>View associated storage</Link></dd><dt>Durable success</dt><dd>{date(backup.durableSuccessAt)}</dd></>}<dt>Started</dt><dd>{date(run.startedAt)}</dd><dt>Finished</dt><dd>{date(run.finishedAt)}</dd><dt>Duration</dt><dd>{run.terminal ? `${(run.durationMs / 1000).toFixed(1)} seconds` : 'In progress'}</dd></dl>
       {backup && !backup.durableSuccessAt && <Alert>No durable backup success is recorded for this run. A snapshot identifier alone does not mean the backup completed safely.</Alert>}
       {collection && <p>{collection.filesCopied} files copied · {collection.filesDeletedOrArchived} displaced/deleted · local copy version {collection.stateVersion}</p>}

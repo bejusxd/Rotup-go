@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,6 +13,40 @@ import (
 	"github.com/bejusxd/rotup/internal/domain"
 	"github.com/bejusxd/rotup/internal/removable"
 )
+
+type exactBatchBackend struct{ *fakeBackend }
+
+func (f exactBatchBackend) ListRevisionBatches(context.Context, string, int) ([]domain.RevisionBatch, error) {
+	return nil, errors.New("a run detail must not search a bounded source history")
+}
+
+func TestAPIRunFetchesItsExactRevisionBatch(t *testing.T) {
+	backend := newFakeBackend()
+	backend.sources = []domain.Source{{ID: "source-one"}}
+	backend.runs = []domain.Run{{ID: "old-run", SourceID: "source-one", Kind: domain.RunKindCollection, Status: domain.RunStatusSucceeded}}
+	backend.batches["source-one"] = []domain.RevisionBatch{{ID: "old-batch", CollectionRunID: "old-run", SourceID: "source-one"}}
+	h, err := NewHandler(Deps{Status: backend, Repo: exactBatchBackend{backend}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := apiRequest(t, h, "GET", "/api/v1/runs/old-run", "", false)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "old-batch") {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPIOperationTargetsAreAllowlisted(t *testing.T) {
+	for _, kind := range []domain.RunKind{domain.RunKindVerify, domain.RunKindDiskSetup} {
+		run := runInfo(domain.Run{Kind: kind, SummaryJSON: `{"repository_id":"repo-one","disk_id":"disk-one","password":"SECRET-CANARY","raw_output":"SECRET-CANARY"}`})
+		encoded, err := json.Marshal(run)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.RepositoryID != "repo-one" || run.DiskID != "disk-one" || strings.Contains(string(encoded), "SECRET-CANARY") {
+			t.Fatalf("bad operation target DTO: %s", encoded)
+		}
+	}
+}
 
 func apiRequest(t *testing.T, handler http.Handler, method, path, body string, csrf bool) *httptest.ResponseRecorder {
 	t.Helper()

@@ -100,6 +100,17 @@ func (f *fakeBackend) ListRevisionBatches(_ context.Context, sourceID string, _ 
 	return f.batches[sourceID], nil
 }
 
+func (f *fakeBackend) RevisionBatchForRun(_ context.Context, runID string) (*domain.RevisionBatch, error) {
+	for _, batches := range f.batches {
+		for _, batch := range batches {
+			if batch.CollectionRunID == runID {
+				return &batch, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
 func (f *fakeBackend) ListEvents(context.Context, int) ([]domain.Event, error) { return f.events, nil }
 
 func (f *fakeBackend) Create(_ context.Context, input collector.SourceInput) (string, error) {

@@ -15,6 +15,7 @@ export interface Source extends SourceInput {
 }
 export interface Run {
   id: string; kind: string; trigger: string; sourceId: string; status: string; terminal: boolean
+  repositoryId: string; diskId: string
   summary: string; error: ApiError | null; requestedAt: Timestamp; startedAt: Timestamp
   finishedAt: Timestamp; durationMs: number
 }
@@ -52,6 +53,7 @@ export interface SourceDetail { source: Source; runs: Run[]; revisionBatches: Re
 export interface RepositoryDetail {
   repository: Repository; sources: { source: Source; eligible: boolean; reason: string }[]
   history: { run: Run; backup: Backup }[]; historyLimit: number
+  lastVerification: Run | null
 }
 export interface RunDetail { run: Run; source: Source | null; collection: Collection | null; revisionBatches: Revision[]; backup: Backup | null }
 export interface Dashboard {

@@ -137,3 +137,31 @@ Validation: typecheck + production build passed; 10 frontend tests passed.
 Browser verified real WSL source list/detail and started a successful connection
 test through Vite's proxy (run `782662c4-a88e-428a-863f-2e9227e2fa74`).
 The collection action was also submitted through its confirmation dialog.
+
+## Checkpoint 4: backup storage and diagnostics
+
+All requested React route families now have working pages: overview, sources,
+disks, repositories, history and diagnostics. Storage preparation is explicit
+initialize/adopt with an unchecked escrow acknowledgement and a separate review
+dialog. Existing established storage links to its detail instead of offering
+initialization. Backup selection uses backend eligibility and submits the selected
+IDs only; verification/recovery is always an explicit confirmed action.
+
+The debug page does not fetch diagnostics when `devMode` is false. New component
+tests cover that guard, eligibility, escrow, password clearing and the snapshot
+success boundary. Thirteen frontend tests, typecheck and production build passed.
+The real WSL collection submitted via the SPA completed successfully as run
+`8b8d1ed2-7117-4702-864f-ced8a5608fe5`, publishing local state version 2.
+
+API follow-up: a run's revision batch is now fetched using the existing exact
+`RevisionBatchForRun` read method, not searched in a bounded source history.
+Disk-setup/verification run targets are decoded through a two-field allowlist;
+arbitrary summary JSON remains private. Repository detail includes the most
+recent successful verification identifiable within the latest 100 global runs,
+or null. Null must be shown as unavailable in recent history, not never verified.
+
+Remaining: embed the production build, move the intact Go UI to `/legacy`,
+finish browser checks (including nested-route refresh and failures), and run the
+full Linux regression/build suite again. No real disk setup/backup/recovery was
+performed during UI development; these operations are covered by existing backend
+tests and new facade delegation tests.

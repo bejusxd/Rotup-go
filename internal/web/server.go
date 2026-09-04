@@ -34,6 +34,7 @@ type Repository interface {
 	LatestCollectionForSource(ctx context.Context, sourceID string) (*domain.Run, error)
 	SourceResult(ctx context.Context, runID, sourceID string) (*domain.SourceResult, error)
 	ListRevisionBatches(ctx context.Context, sourceID string, limit int) ([]domain.RevisionBatch, error)
+	RevisionBatchForRun(ctx context.Context, runID string) (*domain.RevisionBatch, error)
 	ListEvents(ctx context.Context, limit int) ([]domain.Event, error)
 }
 

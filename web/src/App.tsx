@@ -7,6 +7,8 @@ import { DashboardPage } from './pages/Dashboard'
 import { SourceEditPage, SourceNewPage, SourcePage, SourcesPage } from './pages/Sources'
 import { DiskPage, DisksPage } from './pages/Disks'
 import { RunPage, RunsPage } from './pages/Runs'
+import { RepositoriesPage, RepositoryPage, RepositorySetupPage } from './pages/Repositories'
+import { DebugPage } from './pages/Debug'
 
 function AppShell() {
   const system = useSystem()
@@ -21,9 +23,6 @@ function AppShell() {
       <footer>ROTUP · Manual backup operations. No scheduler is enabled.</footer>
     </div></div>
 }
-function PendingPage() {
-  return <EmptyState title="This page is being migrated"><p>The existing Go interface remains available on the daemon while the React migration is in progress.</p><a href="http://127.0.0.1:8080">Open existing interface</a></EmptyState>
-}
 export default function App() {
   const [system, setSystem] = useState<System>()
   const [error, setError] = useState<unknown>()
@@ -34,7 +33,8 @@ export default function App() {
   return <SystemContext.Provider value={system}><Routes><Route element={<AppShell />}><Route index element={<DashboardPage />} />
     <Route path="sources" element={<SourcesPage />} /><Route path="sources/new" element={<SourceNewPage />} /><Route path="sources/:id" element={<SourcePage />} /><Route path="sources/:id/edit" element={<SourceEditPage />} />
     <Route path="disks" element={<DisksPage />} /><Route path="disks/:id" element={<DiskPage />} />
-    <Route path="repositories/*" element={<PendingPage />} /><Route path="runs" element={<RunsPage />} /><Route path="runs/:id" element={<RunPage />} /><Route path="debug" element={<PendingPage />} />
+    <Route path="repositories" element={<RepositoriesPage />} /><Route path="repositories/new" element={<RepositorySetupPage />} /><Route path="repositories/:id" element={<RepositoryPage />} />
+    <Route path="runs" element={<RunsPage />} /><Route path="runs/:id" element={<RunPage />} /><Route path="debug" element={<DebugPage />} />
     <Route path="*" element={<EmptyState title="Page not found"><Link to="/">Return to overview</Link></EmptyState>} />
   </Route></Routes></SystemContext.Provider>
 }

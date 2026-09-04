@@ -3,9 +3,12 @@ import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CredentialForm, SourceForm } from './Sources'
 import { RunPage } from './Runs'
+import { RepositoryPage, RepositorySetupPage } from './Repositories'
+import { DebugPage } from './Debug'
+import { SystemContext } from '../components'
 import { mutate } from '../api/client'
 import { useQuery } from '../api/hooks'
-import type { RunDetail, Source } from '../api/types'
+import type { RunDetail, Source, System } from '../api/types'
 
 vi.mock('../api/client', async importOriginal => ({ ...await importOriginal<typeof import('../api/client')>(), mutate: vi.fn() }))
 vi.mock('../api/hooks', () => ({ useQuery: vi.fn() }))
@@ -45,5 +48,29 @@ describe('backup success presentation', () => {
     render(<MemoryRouter><RunPage /></MemoryRouter>)
     expect(screen.getByText(/No durable backup success is recorded/)).toBeVisible()
     expect(screen.getByText(/candidate-only/)).toBeInTheDocument()
+  })
+})
+
+describe('backend-owned storage safety', () => {
+  it('uses backend eligibility and does not start anything when viewing storage', () => {
+    vi.mocked(useQuery).mockReturnValue({ loading: false, path: '', reload: vi.fn(), data: { repository: { id: 'repo-1', diskId: 'disk-1', diskName: 'Disk A', health: 'HEALTHY', connected: true, established: true, hasPassword: true }, sources: [{ source: { id: 'source-1', name: 'Photos' }, eligible: false, reason: 'staging recovery required' }], history: [], historyLimit: 100, lastVerification: null } })
+    render(<MemoryRouter><RepositoryPage /></MemoryRouter>)
+    expect(screen.getByRole('checkbox')).toBeDisabled()
+    expect(screen.getByText('staging recovery required')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Back up now' })).toBeDisabled()
+    expect(mutate).not.toHaveBeenCalled()
+  })
+  it('requires an explicit offline-password acknowledgement and hides setup for established storage', () => {
+    vi.mocked(useQuery).mockImplementation(path => ({ loading: false, path, reload: vi.fn(), data: path === '/disks' ? { disks: [{ id: 'disk-1', name: 'Disk A', registered: true, observed: true }], enumerationError: '' } : { repositories: [] } }))
+    render(<MemoryRouter initialEntries={['/repositories/new?disk=disk-1']}><SystemContext.Provider value={{ minimumRepositoryPasswordLength: 12 } as System}><RepositorySetupPage /></SystemContext.Provider></MemoryRouter>)
+    expect(screen.getByRole('checkbox')).not.toBeChecked()
+    expect(screen.getByRole('checkbox')).toBeRequired()
+    expect(screen.getByLabelText('New repository password')).toHaveAttribute('minlength', '12')
+    expect(mutate).not.toHaveBeenCalled()
+  })
+  it('does not fetch debug data when development mode is disabled', () => {
+    render(<SystemContext.Provider value={{ devMode: false } as System}><DebugPage /></SystemContext.Provider>)
+    expect(screen.getByText('Development diagnostics are disabled.')).toBeVisible()
+    expect(useQuery).not.toHaveBeenCalled()
   })
 })

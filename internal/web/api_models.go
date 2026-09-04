@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/bejusxd/rotup/internal/backup"
@@ -38,24 +39,37 @@ func sourceInfo(s domain.Source, busy bool) sourceDTO {
 }
 
 type runDTO struct {
-	ID          string       `json:"id"`
-	Kind        string       `json:"kind"`
-	Trigger     string       `json:"trigger"`
-	SourceID    string       `json:"sourceId"`
-	Status      string       `json:"status"`
-	Terminal    bool         `json:"terminal"`
-	Summary     string       `json:"summary"`
-	Error       *apiErrorDTO `json:"error"`
-	RequestedAt *time.Time   `json:"requestedAt"`
-	StartedAt   *time.Time   `json:"startedAt"`
-	FinishedAt  *time.Time   `json:"finishedAt"`
-	DurationMS  int64        `json:"durationMs"`
+	ID           string       `json:"id"`
+	Kind         string       `json:"kind"`
+	Trigger      string       `json:"trigger"`
+	SourceID     string       `json:"sourceId"`
+	RepositoryID string       `json:"repositoryId"`
+	DiskID       string       `json:"diskId"`
+	Status       string       `json:"status"`
+	Terminal     bool         `json:"terminal"`
+	Summary      string       `json:"summary"`
+	Error        *apiErrorDTO `json:"error"`
+	RequestedAt  *time.Time   `json:"requestedAt"`
+	StartedAt    *time.Time   `json:"startedAt"`
+	FinishedAt   *time.Time   `json:"finishedAt"`
+	DurationMS   int64        `json:"durationMs"`
 }
 
 func runInfo(r domain.Run) runDTO {
 	v := runDTO{ID: r.ID, Kind: string(r.Kind), Trigger: string(r.TriggerKind), SourceID: r.SourceID,
 		Status: string(r.Status), Terminal: r.Status.Terminal(), Summary: r.Summary,
 		RequestedAt: instant(r.RequestedAt), StartedAt: instant(r.StartedAt), FinishedAt: instant(r.FinishedAt), DurationMS: r.Duration().Milliseconds()}
+	// These two operation kinds record their target in a structured summary.
+	// Decode only known identifiers, never return the arbitrary summary map.
+	if r.Kind == domain.RunKindDiskSetup || r.Kind == domain.RunKindVerify {
+		var target struct {
+			RepositoryID string `json:"repository_id"`
+			DiskID       string `json:"disk_id"`
+		}
+		if json.Unmarshal([]byte(r.SummaryJSON), &target) == nil {
+			v.RepositoryID, v.DiskID = target.RepositoryID, target.DiskID
+		}
+	}
 	if r.ErrorCode != "" || r.SafeError != "" {
 		v.Error = &apiErrorDTO{r.ErrorCode, string(r.ErrorClass), r.SafeError, userErrorMessage(string(r.ErrorClass))}
 	}

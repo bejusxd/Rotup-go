@@ -176,12 +176,28 @@ func (h *handler) apiRepository(w http.ResponseWriter, r *http.Request) {
 	for _, r := range history {
 		runs = append(runs, historyDTO{runInfo(r.Run), backupInfo(r.Backup)})
 	}
+	var lastVerification *runDTO
+	if h.deps.Repo != nil {
+		recent, err := h.deps.Repo.ListRuns(ctx, 100)
+		if err != nil {
+			h.apiError(w, err)
+			return
+		}
+		for _, run := range recent {
+			dto := runInfo(run)
+			if run.Kind == domain.RunKindVerify && run.Status.Successful() && dto.RepositoryID == id {
+				lastVerification = &dto
+				break
+			}
+		}
+	}
 	h.apiJSON(w, 200, struct {
-		Repository   repositoryDTO       `json:"repository"`
-		Sources      []eligibleSourceDTO `json:"sources"`
-		History      []historyDTO        `json:"history"`
-		HistoryLimit int                 `json:"historyLimit"`
-	}{repositoryInfo(v), eligible, runs, 100})
+		Repository       repositoryDTO       `json:"repository"`
+		Sources          []eligibleSourceDTO `json:"sources"`
+		History          []historyDTO        `json:"history"`
+		HistoryLimit     int                 `json:"historyLimit"`
+		LastVerification *runDTO             `json:"lastVerification"`
+	}{repositoryInfo(v), eligible, runs, 100, lastVerification})
 }
 
 func runList(runs []domain.Run) []runDTO {
@@ -239,15 +255,13 @@ func (h *handler) apiRun(w http.ResponseWriter, r *http.Request) {
 			if result != nil {
 				v.Collection = &sourceResultDTO{result.StagingStateVersion, instant(result.PublishedAt), result.BytesScanned, result.BytesCopied, result.FilesScanned, result.FilesCopied, result.FilesDeletedOrArchived, result.EngineErrors, nonNil(result.Warnings)}
 			}
-			batches, err := h.deps.Repo.ListRevisionBatches(ctx, run.SourceID, 100)
+			batch, err := h.deps.Repo.RevisionBatchForRun(ctx, run.ID)
 			if err != nil {
 				h.apiError(w, err)
 				return
 			}
-			for _, b := range batches {
-				if b.CollectionRunID == run.ID {
-					v.RevisionBatches = append(v.RevisionBatches, revisionInfo(b))
-				}
+			if batch != nil {
+				v.RevisionBatches = append(v.RevisionBatches, revisionInfo(*batch))
 			}
 		}
 	}
