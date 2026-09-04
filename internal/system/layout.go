@@ -213,7 +213,9 @@ func UnitContent(l Layout) (string, error) {
 	b.WriteString("# Managed by `rotupd setup`. Edit through setup, not by hand.\n")
 	b.WriteString("[Unit]\n")
 	b.WriteString("Description=ROTUP local backup daemon\n")
-	b.WriteString("Documentation=man:rotupd(8)\n")
+	// No Documentation= line: ROTUP ships no man page, and systemd-analyze
+	// verify rightly reports a reference to one that does not exist. Read
+	// docs/operations/installation.md, or run `rotupd help`.
 	b.WriteString("# systemd-tmpfiles-setup creates /run/rotup root-owned before this starts.\n")
 	b.WriteString("After=local-fs.target network-online.target systemd-tmpfiles-setup.service\n")
 	b.WriteString("Wants=network-online.target\n")

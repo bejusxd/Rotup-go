@@ -267,6 +267,11 @@ func TestGeneratedUnitKeepsPrivilegeEscalationAndTheHostMountNamespace(t *testin
 	if !strings.Contains(unit, "systemd-tmpfiles-setup.service") {
 		t.Error("the unit must start after the runtime directory is created")
 	}
+	// systemd-analyze verify reports a Documentation= URI that does not
+	// resolve, and ROTUP ships no man page.
+	if strings.Contains(unit, "Documentation=") {
+		t.Error("the unit must not reference documentation that does not exist")
+	}
 }
 
 func TestGeneratedEnvironmentFileCarriesNoSecret(t *testing.T) {
