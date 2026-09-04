@@ -8,7 +8,8 @@ staging barriers, UUID identity, setup/escrow, backup durability and recovery.
 ## Checkpoint 1: JSON API and development-mode foundation
 
 Implemented in `internal/web/api*.go` alongside the unchanged HTML routes.
-No React frontend or SPA routing is enabled at this checkpoint.
+The JSON API also drives the separate Vite preview added in checkpoint 2.
+The daemon still serves the existing HTML UI at this checkpoint.
 
 - `GET /api/v1/health` retains the `/healthz` JSON shape and status semantics.
 - `GET /api/v1/system` returns safe version/engine information, `devMode`, and
@@ -87,3 +88,33 @@ media use the installed privileged wrapper, never elevate the daemon:
    fixtures for mutating tests, and never initialize over established storage.
 
 Commit each working slice and update this document. No M5 work is authorized.
+
+## Checkpoint 2: React foundation and overview
+
+`web/` contains a typed API client, same-origin CSRF bootstrap, abortable read
+hooks, React Router shell, accessible primitives, system dark/light styles and
+a real-data dashboard/setup checklist. Mutations are never automatically retried.
+History/read snapshots are explicitly bounded; missing data is not success.
+The remaining page routes currently explain that migration is in progress.
+
+Use Node 22.12+ (Node 24 used here), with npm:
+
+```sh
+# Terminal 1, repository root; add the existing media/engine settings if needed.
+ROTUP_DEV_MODE=true go run ./cmd/rotupd
+# Terminal 2
+cd web
+npm ci
+npm run dev
+# http://127.0.0.1:5173 (proxies /api to 127.0.0.1:8080)
+npm test
+npm run typecheck
+npm run build
+```
+
+Versions are pinned in `package-lock.json`. No Node runtime is needed by Go;
+production embedding comes in a later checkpoint. Build output is ignored for
+now. No lint framework is configured; TypeScript strict checks and component
+regressions are present. Four component tests passed; typecheck and Vite build
+passed. Browser verified the dashboard against the WSL database and checked the
+dark layout. All management pages and embedded serving remain to be implemented.
