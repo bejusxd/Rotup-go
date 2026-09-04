@@ -4,6 +4,9 @@ import { loadSystem } from './api/client'
 import type { System } from './api/types'
 import { Alert, EmptyState, ErrorAlert, LoadingState, SystemContext, useSystem } from './components'
 import { DashboardPage } from './pages/Dashboard'
+import { SourceEditPage, SourceNewPage, SourcePage, SourcesPage } from './pages/Sources'
+import { DiskPage, DisksPage } from './pages/Disks'
+import { RunPage, RunsPage } from './pages/Runs'
 
 function AppShell() {
   const system = useSystem()
@@ -29,7 +32,9 @@ export default function App() {
   if (error) return <main><PageBoot /><ErrorAlert error={error} /><button onClick={() => setRetry(v => v + 1)}>Try again</button></main>
   if (!system) return <main><PageBoot /><LoadingState /></main>
   return <SystemContext.Provider value={system}><Routes><Route element={<AppShell />}><Route index element={<DashboardPage />} />
-    <Route path="sources/*" element={<PendingPage />} /><Route path="disks/*" element={<PendingPage />} /><Route path="repositories/*" element={<PendingPage />} /><Route path="runs/*" element={<PendingPage />} /><Route path="debug" element={<PendingPage />} />
+    <Route path="sources" element={<SourcesPage />} /><Route path="sources/new" element={<SourceNewPage />} /><Route path="sources/:id" element={<SourcePage />} /><Route path="sources/:id/edit" element={<SourceEditPage />} />
+    <Route path="disks" element={<DisksPage />} /><Route path="disks/:id" element={<DiskPage />} />
+    <Route path="repositories/*" element={<PendingPage />} /><Route path="runs" element={<RunsPage />} /><Route path="runs/:id" element={<RunPage />} /><Route path="debug" element={<PendingPage />} />
     <Route path="*" element={<EmptyState title="Page not found"><Link to="/">Return to overview</Link></EmptyState>} />
   </Route></Routes></SystemContext.Provider>
 }

@@ -118,3 +118,22 @@ now. No lint framework is configured; TypeScript strict checks and component
 regressions are present. Four component tests passed; typecheck and Vite build
 passed. Browser verified the dashboard against the WSL database and checked the
 dark layout. All management pages and embedded serving remain to be implemented.
+
+## Checkpoint 3: sources, disks and run workflows
+
+React source list/detail/new/edit pages use the existing Go use cases. Password
+replace/clear is explicit, write-only, never stored in browser storage, and the
+input is cleared after either success or failure. Collection requires a dialog
+that distinguishes local staging from USB backup. Accepted runs open History.
+
+Disk list/detail/registration/settings are implemented. Registration submits the
+filesystem UUID, not a device node; manual mount/unmount diagnostics remain behind
+technical details and confirmation. Current presence and identity still come from
+Go. No new media logic was added. Run list/detail show exact errors, collection
+results and backup durability/read-set data without inferring success from a
+candidate snapshot. The repository screens still await checkpoint 4.
+
+Validation: typecheck + production build passed; 10 frontend tests passed.
+Browser verified real WSL source list/detail and started a successful connection
+test through Vite's proxy (run `782662c4-a88e-428a-863f-2e9227e2fa74`).
+The collection action was also submitted through its confirmation dialog.

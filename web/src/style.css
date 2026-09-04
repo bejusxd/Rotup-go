@@ -85,6 +85,9 @@ dialog { max-width: 550px; width: calc(100% - 32px); border: 1px solid var(--bor
 dialog::backdrop { background: #10182088; }
 dialog .actions { justify-content: flex-end; margin-top: 24px; }
 label { display: grid; gap: 6px; font-weight: 550; margin-bottom: 16px; }
+fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.form-actions { margin-top: 22px; }
+.registration { border-top: 1px solid var(--border); padding: 20px 0; max-width: 700px; }
 input, select, textarea { width: 100%; background: var(--surface); color: var(--text); border: 1px solid var(--border); padding: 10px 12px; border-radius: 5px; min-width: 0; }
 input[type="checkbox"] { width: 17px; height: 17px; flex: none; accent-color: var(--accent); }
 label.checkbox { display: flex; align-items: flex-start; gap: 10px; font-weight: 400; }
