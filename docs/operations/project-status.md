@@ -148,6 +148,17 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 
 ## Continuation
 
+Claude task 04 stopped at the subscription session limit on 2026-09-05; the CLI
+reports reset at 22:40 Europe/Warsaw. The coordination heartbeat is PAUSED.
+Preparation reached successful collection `3f53c84d-9e59-49fb-9041-cf5a7a8dea89`
+(staging version 7, about 48 MiB test data). The interruption script was written
+under `.cache/operator/m4-loop/92-interrupt.sh`, but no interruption backup was
+started according to the live run history. Do not count this drill as passed.
+At coordinator inspection the daemon health is OK and the UUID-verified loop
+disk is unmounted. Resume by reviewing task-04 prompt/log and the prepared script,
+then rechecking active runs/media before any action. Last accepted task commit
+is `b6fe2aa`; no M5 work started.
+
 Read this checkpoint, actual HEAD/status and installation/m4 operations docs.
 Check for active writers before dispatch. Finish the first unresolved queue item,
 review its diff and tests, commit a coherent checkpoint, then update this file.
