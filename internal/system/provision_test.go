@@ -365,3 +365,66 @@ func failureDetails(report Report) []string {
 	}
 	return out
 }
+
+// A rejected parent must not redirect subsequent chmod/chown or config writes.
+func TestSetupRefusesSymlinkedDirectoryTrees(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX symlinks and permissions")
+	}
+	for _, path := range []string{DataDir, RuntimeDir, ConfigDir, "/var/lib"} {
+		t.Run(strings.ReplaceAll(path, "/", "_"), func(t *testing.T) {
+			host := newSetupHost(t)
+			outside := t.TempDir()
+			for _, child := range []string{"staging", "secrets", "media", "rotup", "rotup/staging", "rotup/secrets"} {
+				if err := os.MkdirAll(filepath.Join(outside, child), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sentinel := filepath.Join(outside, "rotupd.env")
+			if err := os.WriteFile(sentinel, []byte("sentinel\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(host.Root, path)
+			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, link); err != nil {
+				t.Fatal(err)
+			}
+			before := map[string]os.FileMode{}
+			if err := filepath.Walk(outside, func(p string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				before[p] = info.Mode()
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			options := defaultSetup(t, host)
+			options.Force = true // Even explicit replacement cannot bypass an unsafe parent.
+			report, _ := Setup(context.Background(), host, options)
+			if report.Ready() {
+				t.Fatal("setup accepted a symlinked directory tree")
+			}
+			for p, mode := range before {
+				info, err := os.Lstat(p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if info.Mode() != mode {
+					t.Errorf("outside mode changed for %s: %v -> %v", p, mode, info.Mode())
+				}
+			}
+			content, err := os.ReadFile(sentinel)
+			if err != nil || string(content) != "sentinel\n" {
+				t.Fatalf("outside config changed: %q, %v", content, err)
+			}
+			for _, changed := range host.chowns {
+				if changed == path || strings.HasPrefix(changed, path+"/") {
+					t.Errorf("chown crossed rejected path: %s", changed)
+				}
+			}
+		})
+	}
+}

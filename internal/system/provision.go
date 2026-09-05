@@ -323,13 +323,17 @@ func provisionRuntime(host Host, options SetupOptions, layout Layout, report *Re
 		if path == MediaMountRoot {
 			id, title = "setup.mountroot", "Media mount root"
 		}
-		ensureDirectory(host, options, report, GroupRuntime, id, title, path, RuntimeDirMode, 0, layout.GID)
+		if !ensureDirectory(host, options, report, GroupRuntime, id, title, path, RuntimeDirMode, 0, layout.GID) {
+			return
+		}
 	}
 }
 
 func provisionData(host Host, options SetupOptions, layout Layout, report *Report) {
-	ensureDirectory(host, options, report, GroupData, "setup.data", "Data directory",
-		DataDir, DataDirMode, layout.UID, layout.GID)
+	if !ensureDirectory(host, options, report, GroupData, "setup.data", "Data directory",
+		DataDir, DataDirMode, layout.UID, layout.GID) {
+		return
+	}
 	ensureDirectory(host, options, report, GroupData, "setup.staging", "Staging root",
 		StagingRoot, DataDirMode, layout.UID, layout.GID)
 	// The secret store's mode is the whole protection for stored credentials.
@@ -339,8 +343,10 @@ func provisionData(host Host, options SetupOptions, layout Layout, report *Repor
 }
 
 func provisionConfig(host Host, options SetupOptions, layout Layout, tools Tools, report *Report) {
-	ensureDirectory(host, options, report, GroupData, "setup.configdir", "Configuration directory",
-		ConfigDir, ConfigDirMode, 0, layout.GID)
+	if !ensureDirectory(host, options, report, GroupData, "setup.configdir", "Configuration directory",
+		ConfigDir, ConfigDirMode, 0, layout.GID) {
+		return
+	}
 
 	content := EnvFileContent(layout, tools.RclonePath, tools.ResticPath, tools.LsblkPath)
 	existing, err := host.ReadFile(EnvFilePath)
@@ -443,23 +449,40 @@ func writeManagedFile(host Host, options SetupOptions, report *Report, group, id
 // only those two things on an existing one. It never removes or empties a
 // directory that is already there, so rerunning setup cannot destroy staging,
 // secrets or a database.
-func ensureDirectory(host Host, options SetupOptions, report *Report, group, id, title, path string, mode fs.FileMode, uid, gid int) {
+func ensureDirectory(host Host, options SetupOptions, report *Report, group, id, title, path string, mode fs.FileMode, uid, gid int) bool {
+	// Lstat only protects the final component. Check parents from the root
+	// down before observing or mutating a child of a redirected directory.
+	var parents []string
+	for parent := filepath.Dir(path); ; parent = filepath.Dir(parent) {
+		parents = append(parents, parent)
+		if filepath.Dir(parent) == parent {
+			break
+		}
+	}
+	for i := len(parents) - 1; i >= 0; i-- {
+		parent, err := host.Lstat(parents[i])
+		if err != nil || parent.IsSymlink || (parent.Exists && !parent.IsDir) {
+			report.Fail(group, id, title, parents[i]+" is not a safe directory ancestor",
+				"Resolve the ancestor path by hand. Setup will not follow symbolic links when provisioning directories.")
+			return false
+		}
+	}
 	state, err := host.Lstat(path)
 	if err != nil {
 		report.Fail(group, id, title, path+" could not be inspected: "+safeError(err), "")
-		return
+		return false
 	}
 	if state.Exists && !state.IsDir {
 		report.Fail(group, id, title, path+" exists and is not a directory",
 			"Move it aside by hand. Setup will not remove anything that is already there.")
-		return
+		return false
 	}
 
 	correctMode := state.Exists && state.Mode.Perm() == mode.Perm()
 	correctOwner := state.Exists && (state.UID < 0 || (state.UID == uid && (gid <= 0 || state.GID == gid)))
 	if correctMode && correctOwner {
 		report.OK(group, id, title, fmt.Sprintf("%s, mode %04o", path, mode.Perm()))
-		return
+		return true
 	}
 	if options.DryRun {
 		action := "would create"
@@ -467,30 +490,31 @@ func ensureDirectory(host Host, options SetupOptions, report *Report, group, id,
 			action = "would correct permissions on"
 		}
 		report.Fixed(group, id, title, fmt.Sprintf("%s %s to mode %04o", action, path, mode.Perm()))
-		return
+		return true
 	}
 
 	if !state.Exists {
 		if err := host.MkdirAll(path, mode); err != nil {
 			report.Fail(group, id, title, "creating "+path+" failed: "+safeError(err), "")
-			return
+			return false
 		}
 	}
 	// MkdirAll leaves an existing directory's mode alone and applies umask to a
 	// new one, so the mode is always set explicitly afterwards.
 	if err := host.Chmod(path, mode); err != nil {
 		report.Fail(group, id, title, "setting permissions on "+path+" failed: "+safeError(err), "")
-		return
+		return false
 	}
 	if err := host.Chown(path, uid, gid); err != nil && !errors.Is(err, ErrNotSupported) {
 		report.Fail(group, id, title, "setting ownership on "+path+" failed: "+safeError(err), "")
-		return
+		return false
 	}
 	action := "created"
 	if state.Exists {
 		action = "corrected"
 	}
 	report.Fixed(group, id, title, fmt.Sprintf("%s %s, mode %04o", action, path, mode.Perm()))
+	return true
 }
 
 // safeError keeps a filesystem error's shape without repeating a path that may
