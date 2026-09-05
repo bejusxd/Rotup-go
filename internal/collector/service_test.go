@@ -260,6 +260,53 @@ func TestCollectionArchivesDeletedFile(t *testing.T) {
 	assertFiles(t, "revisions", h.revisionFiles(run.ID), map[string]string{"b.txt": "B"})
 }
 
+// A run that both replaces and removes a file must report every object it
+// displaced, not just the ones that vanished from the source.
+//
+// Under an archiving policy nothing is deleted: each displaced object is moved
+// into the revision batch, and the engine counts those moves as renames while
+// counting a delete only for the object the source no longer has. Reporting the
+// delete counter alone made the run claim one displaced object while its own
+// revision batch durably recorded two, so the history contradicted the data.
+func TestArchivingRunReportsEveryDisplacedObject(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, domain.PolicyArchiveThenSync)
+	h.writeSource("keep.txt", "KEEP")
+	h.writeSource("change.txt", "OLD")
+	h.writeSource("remove.txt", "GONE")
+	if run, _ := h.collect(); !run.Status.Successful() {
+		t.Fatalf("seed run failed: %s", run.SafeError)
+	}
+
+	h.writeSource("change.txt", "NEW")
+	h.removeSource("remove.txt")
+	run, _ := h.collect()
+
+	if !run.Status.Successful() {
+		t.Fatalf("run status = %s (%s)", run.Status, run.SafeError)
+	}
+	assertFiles(t, "current", h.currentFiles(), map[string]string{"keep.txt": "KEEP", "change.txt": "NEW"})
+	assertFiles(t, "revisions", h.revisionFiles(run.ID), map[string]string{"change.txt": "OLD", "remove.txt": "GONE"})
+
+	batch, err := h.store.RevisionBatchForRun(context.Background(), run.ID)
+	if err != nil || batch == nil {
+		t.Fatalf("revision batch was not recorded: %v", err)
+	}
+	if batch.ItemCount != 2 {
+		t.Fatalf("batch item count = %d, want 2", batch.ItemCount)
+	}
+
+	result, err := h.store.SourceResult(context.Background(), run.ID, h.source.ID)
+	if err != nil || result == nil {
+		t.Fatalf("source result was not recorded: %v", err)
+	}
+	if result.FilesDeletedOrArchived != batch.ItemCount {
+		t.Fatalf("run reported %d displaced object(s) but its revision batch holds %d",
+			result.FilesDeletedOrArchived, batch.ItemCount)
+	}
+}
+
 // copy_only must never remove anything from the current tree.
 func TestCopyOnlyNeverRemovesStagedData(t *testing.T) {
 	t.Parallel()

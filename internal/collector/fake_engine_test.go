@@ -142,6 +142,11 @@ func (f *fakeEngine) transfer(request ports.TransferRequest) (ports.TransferStat
 			if err := archiveFile(request.ArchiveDir, relative, existing); err != nil {
 				return stats, err
 			}
+			// Moving the superseded version into the archive is a rename, not a
+			// delete. Real rclone counts it exactly this way: verified against
+			// rclone 1.75.0, `sync --backup-dir` reported renames=2, deletes=1
+			// for one replaced and one removed object.
+			stats.Renames++
 		}
 		if err := os.MkdirAll(filepath.Dir(destinationPath), 0o700); err != nil {
 			return stats, err
@@ -170,7 +175,13 @@ func (f *fakeEngine) transfer(request ports.TransferRequest) (ports.TransferStat
 		if err := os.Remove(filepath.Join(request.DestinationDir, filepath.FromSlash(relative))); err != nil {
 			return stats, err
 		}
+		// An object that vanished from the source is counted twice by rclone:
+		// once as a delete, because it is gone from the source side, and once as
+		// a rename, because --backup-dir moved it into the archive instead of
+		// removing it. Both counters are mirrored so the collector is tested
+		// against the numbers a real engine reports.
 		stats.Deletes++
+		stats.Renames++
 	}
 	return stats, nil
 }

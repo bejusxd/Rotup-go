@@ -16,9 +16,9 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 | Milestone | Evidence and current status |
 |---|---|
 | M1 skeleton | Implemented; current Go suite and live health endpoint pass. |
-| M2 collection | Implemented; live UI records successful SMB test and published collection. Not rerun against SMB in this checkpoint. |
+| M2 collection | Implemented; the live daemon collected the real SMB share three more times, including an `archive_then_sync` run that displaced a replaced and a removed file into a recorded revision batch. One reporting defect found and fixed (see below). |
 | M3 media | Implemented; prior loop-device evidence exists, and mount/sync/unmount ran cleanly through the daemon during the loop-image backup run. Physical removal acceptance remains separate. |
-| M4 backup | Implemented, acceptance OPEN. First manual backup and an independent restore now succeeded on the real daemon against a loop image; see m4-loop-acceptance.md. USB acceptance still requires real removable media, the changed/deleted-file round trip and interruption evidence per m4-backup.md. |
+| M4 backup | Implemented, acceptance OPEN. On the real daemon against a loop image: first manual backup, then a full changed/deleted round trip (baseline backup, mutation, archiving collection, second backup) with both snapshots restored independently; see m4-loop-acceptance.md. USB acceptance still requires real removable media and interruption evidence per m4-backup.md. |
 | M5 scheduler | Not started; held until M4 acceptance and explicit scope review. |
 | M6 rotation | Planned. |
 | M7 reporting | Planned. |
@@ -28,7 +28,7 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 ## Current validation
 
 - `gofmt -l`, `go vet ./...`, `go test ./...` and both Linux builds passed under
-  Ubuntu WSL at `dd4d8f1` (re-run 2026-09-05, no code changes in this task).
+  Ubuntu WSL, most recently after the collector displaced-object fix.
 - Frontend: 28 tests in 4 files passed; TypeScript check passed.
 - `/api/v1/setup`: all 8 application steps done, `complete: true`. System setup
   still reports broad DrvFS data-directory modes and no installed systemd unit;
@@ -51,7 +51,10 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 4. Implemented and recorded the first manual `BACKUP_LATEST` plus an independent
    restic restore against the loop-image fixture. Evidence lives in
    `docs/operations/m4-loop-acceptance.md`.
-5. Reconcile the live WSL runtime with the approved installation layout, then
+5. Implemented and recorded the `archive_then_sync` changed/deleted round trip
+   against the real SMB share and the loop repository, and fixed the displaced
+   object under-count it exposed.
+6. Reconcile the live WSL runtime with the approved installation layout, then
    resume M4 acceptance only with positively identified test media. Do not treat
    local/fake-media tests as USB acceptance.
 
@@ -87,6 +90,26 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
   is explicitly not USB acceptance.
 - `sudo` was not needed for this run: the daemon's existing narrow helper rule
   covered mount and unmount. No further privilege was requested.
+- Round trip completed on 2026-09-05 against the real SMB share
+  (`/home/bejo/rotup-smb-source`, identified from Samba's own configuration) with
+  a uniquely named test-only fixture that is deliberately left in place.
+  Collections `d754887a…` (state version 3) and `0aacb8c0…` (state version 4,
+  revision batch `abd67870-0955-4792-be0e-32dac78b2e1b`, 2 items / 102 bytes,
+  reconciliation completed). Backups `79940590…` → snapshot `3caa1587…` and
+  `66a5aac3…` → snapshot `f41cbc26…`, both `DURABLE_SUCCESS`. Both snapshots were
+  restored independently: the archived hashes equal the pre-change fixture, the
+  current hashes equal the live share, and the baseline snapshot is unaltered.
+  Every pre-existing share file hashes as it did before.
+- Defect found and fixed during that run: a collection reported one displaced
+  object while its own revision batch held two. `archive_then_sync` moves rather
+  than deletes, and rclone counts those moves as renames — verified directly
+  against rclone 1.75.0, which reported `deletes: 1, renames: 2` for one replaced
+  and one removed file. `internal/collector/service.go` now derives the figure
+  from renames under an archiving policy; the collector's fake engine was
+  mirroring the wrong counters, which is why nothing caught it. Regression
+  `TestArchivingRunReportsEveryDisplacedObject` fails against the old expression.
+  No archived, restored or backed-up bytes were affected; the defect was in an
+  operator-facing count only.
 - Noticed while validating: the compiled `rotup-mounthelper` binary in the
   repository root is **tracked**, so `go build ./cmd/rotup-mounthelper` dirties
   the working tree. `.gitignore` anchors `/rotupd` and `/rotupd.exe` but not this

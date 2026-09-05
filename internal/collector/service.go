@@ -389,7 +389,7 @@ func (s *Service) collect(ctx context.Context, run domain.Run, source domain.Sou
 	outcome.Warnings = append(outcome.Warnings, transfer.Warnings...)
 	outcome.Result.BytesCopied = transfer.Stats.Bytes
 	outcome.Result.FilesCopied = transfer.Stats.Transfers
-	outcome.Result.FilesDeletedOrArchived = transfer.Stats.Deletes
+	outcome.Result.FilesDeletedOrArchived = displacedObjects(transfer.Stats, archives)
 	outcome.Result.EngineChecks = transfer.Stats.Checks
 	outcome.Result.EngineErrors = transfer.Stats.Errors
 	if transfer.Stats.Available && transfer.Stats.TotalBytes > 0 {
@@ -682,6 +682,27 @@ func statusForFailure(err error) domain.RunStatus {
 	default:
 		return domain.RunStatusFailed
 	}
+}
+
+// displacedObjects reports how many objects left the current tree during one
+// transfer, which is what the run's history and the operator-facing
+// "deleted or archived" figure mean.
+//
+// An archiving policy deletes nothing: every replaced or vanished object is
+// *moved* into the run's revision batch. The engine counts each of those moves
+// as a rename, and counts a delete only for the subset that disappeared from
+// the source — a file replaced by a newer version is renamed into the archive
+// without ever being counted as a delete. Reading the delete counter alone
+// therefore under-reports the batch, so a run that archived an old version and
+// a removed file would claim one displaced object while its revision batch
+// durably recorded two. Renames is the count that matches the batch.
+//
+// A non-archiving policy never renames, so its delete counter is the answer.
+func displacedObjects(stats ports.TransferStats, archives bool) int64 {
+	if archives {
+		return stats.Renames
+	}
+	return stats.Deletes
 }
 
 // deletionGuardWarning warns when a source has lost a large share of its files
