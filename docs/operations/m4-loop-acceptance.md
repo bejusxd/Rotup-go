@@ -20,6 +20,8 @@ Four exercises are recorded, in order:
    after bringing the daemon to the committed fix.
 4. [A controlled graceful interruption of a real backup](#exercise-4-controlled-graceful-interruption-and-refused-adoption),
    and the recovery that refused to adopt it.
+5. [Lock refusal](#exercise-5-lock-refusal-a-negative-live-result-and-what-replaced-it) —
+   which turned out **not** to be demonstrable live, and what was done instead.
 
 ## Fixture
 
@@ -558,10 +560,100 @@ daemon's supported actions:
 - Every pre-drill file in the share is byte-identical; the only additions are
   this drill's two fixtures.
 
+## Exercise 5: lock refusal — a negative live result and what replaced it
+
+**There is no live lock-refusal pass here, and none should be claimed.** The
+attempt produced a negative result about restic itself, which is worth more than
+a forced demonstration would have been.
+
+### Why a live lock owner cannot be arranged safely
+
+ROTUP never inspects lock files. Its verification runs `restic snapshots` and
+`restic check` **without** `--no-lock` (`internal/adapters/restic/restic.go:302`
+and `:342`), so it takes restic's ordinary non-exclusive lock and learns that
+someone else holds the repository only from restic's own refusal.
+
+Two probes were run against throwaway repositories under `/tmp`, each with its
+own generated password. The acceptance repository was never opened by them.
+
+| Probe | Lock holder | `restic snapshots` | `restic check` |
+|---|---|---|---|
+| A | a real `restic backup`, frozen with `SIGSTOP` while a lock file demonstrably existed | exit 0 | exit 0 |
+| B | a real `restic prune`, frozen the instant a lock file appeared | exit 0 | exit 0 |
+
+Non-exclusive locks coexist by design, so the only lock that can make ROTUP's
+verification refuse is an **exclusive** one — and every restic command that takes
+an exclusive lock (`prune`, `forget --prune`, `repair`, `migrate`) rewrites or
+deletes repository data. None of them may be pointed at a repository holding the
+acceptance evidence, and no safe command produces one.
+
+That is the documented fallback condition, so the refusal was proven by isolated
+tests instead, and this exercise is labelled a negative live result.
+
+### What was added instead
+
+**Adapter — `TestLockedRepositoryIsReportedAsUnavailable`.** Both signals a real
+locked restic gives are mapped to `restic_repository_locked` with class
+`UNAVAILABLE`: the dedicated exit code 11, and exit 1 carrying "unable to create
+lock … repository is already locked". They are not interchangeable, and reading
+only the exit code would let the second fall through to a generic failure. This
+mapping existed but had no test.
+
+**Service — `TestRecoveryRefusesALockedRepositoryAndResumesWhenItIsReleased`.**
+Two phases against a deliberately dangerous setup: the interrupted backup in it
+is genuinely adoptable — its snapshot exists, carries the run's tag and matches
+the recorded read-set — so everything except the lock is in place for recovery to
+grant coverage.
+
+| Phase | Condition | Required outcome |
+|---|---|---|
+| 1 | engine reports `restic_repository_locked` | run `FAILED` with that code; health `RECOVERY_REQUIRED`; the interrupted backup **not** adopted; no verified snapshot; **no revision coverage**; disk still synced and unmounted |
+| 2 | the lock is gone (owner exited); nothing else changed | the same recovery succeeds, adopts, and records coverage |
+
+Phase 2 is what makes this a lock test rather than a generic failure test: the
+repository was fine all along, so refusing and then resuming is the whole
+behaviour.
+
+The test was mutation-checked. Making `proveRepository` swallow the check error
+makes phase 1 fail with "recovery succeeded against a repository held by another
+process", which is precisely the defect it guards against.
+
+### The honest limit of that evidence
+
+The lock is injected at the engine boundary. That is exactly where a real lock
+surfaces — ROTUP has no other way to see one — and the adapter test proves real
+restic lock signals produce that error. So the chain is covered end to end in two
+pieces. But **no single test drives a genuine exclusive restic lock through the
+service**, and nothing here was demonstrated on the live loop image. ROTUP has no
+unlock path and none was added; no lock was created, cleared or worked around on
+the acceptance repository.
+
+### Live state confirmed alongside it
+
+With no lock present, the supported verification behaves normally:
+
+| Field | Value |
+|---|---|
+| Verify run | `992cf236-211f-4aed-abd2-7f2aebb0ab87` (`VERIFY` / `RECOVERY`) |
+| Status | `SUCCEEDED`, 3971 ms |
+| Summary | `repository verified: 5 snapshot(s), 0 interrupted backup(s) adopted, 0 abandoned` |
+| Health | `SUSPECT` while in flight → `HEALTHY` |
+
+Independently afterwards: repository identity `1d80cb0f…`; 5 snapshots with all
+four pre-drill ones present; no snapshot tagged with the interrupted run
+`72297e78…`; **no restic lock**; snapshot `fcade47e…` restored with every fixture
+hash matching its pre-drill value; every pre-existing share file byte-identical;
+disk synced and unmounted.
+
 ## Final state
 
 - Daemon: `6670d28`, pid 501, user bejo (uid 1000), `127.0.0.1:8080`,
   `overall_status: ok`, single instance, no non-terminal run.
+- Loop image reattached by the coordinator and reverified here: `lsblk` and the
+  daemon agree on UUID `063c94b9-bd1e-4496-b70c-85fadc635531`; disk
+  `AVAILABLE_UNMOUNTED`; onboarding `complete: true`.
+- Repository `331f4905…` `HEALTHY`, 5 snapshots, no lock, last verification
+  `992cf236…`.
 - **WSL was restarted between sessions** (uptime 0 at the time of writing), which
   detached the loop device and killed the daemon started from a `wsl.exe` call.
   The daemon was restored with the same guarded script, same binary checksum and
@@ -608,9 +700,9 @@ the earlier sections refer to them.
   adoption. The interruption landed ~135 ms into restic, before any pack data
   was written, so nothing here shows recovery reconciling a repository that
   really did change.
-- Because the cancelled restic left no lock, the lock-refusal path
-  (recovery declining while another process holds the repository) is also
-  unexercised.
+- Lock refusal is covered by tests only, never live. See exercise 5: with restic
+  0.17.3 no safe command can hold a lock that blocks ROTUP's verification, so
+  there is no live pass to point at and none is claimed.
 - `restic check` here is structural only. It is not `--read-data`, so the pack
   file contents are not certified. No retention, forget or prune was run.
 - The data is tiny (at most 12 files, 643 bytes) with no large files, hard links,
@@ -665,3 +757,9 @@ verifying the binary checksum and the singleton conditions),
 `95-inspect-durable-state.sh` (what the interrupted run claims and must not
 claim), `96-preservation-check.sh` (snapshot inventory, lock evidence, restore
 and hash comparison against pre-drill values).
+
+Exercise 5: `A0-lock-semantics-probe.sh` and `A1-exclusive-lock-probe.sh` (the
+throwaway-repository probes that established no safe lock blocks ROTUP's reads),
+`A2-validate-lock-tests.sh` (gofmt, vet and the two packages), and
+`A3-prove-lock-test-teeth.sh` (mutates `proveRepository` to swallow the check
+error, shows the new test fails, and restores the file).

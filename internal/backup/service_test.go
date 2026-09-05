@@ -1450,6 +1450,108 @@ func TestRecoveryRefusesFailedCheck(t *testing.T) {
 	}
 }
 
+// A repository another live process holds must be left alone, and must be
+// recoverable once that process is gone.
+//
+// The dangerous shape here is not the refusal itself but what surrounds it: the
+// interrupted backup in this test is genuinely adoptable — its snapshot exists,
+// carries the run's tag and matches the recorded read-set — so everything except
+// the lock is in place for recovery to grant coverage. A recovery that treated
+// "cannot open the repository right now" as anything other than a hard stop
+// would therefore adopt a backup it never actually proved.
+//
+// ROTUP has no way to see a lock directly: it runs restic's `check` and
+// `snapshots` without --no-lock and believes the refusal. So the lock is
+// injected exactly where a real one surfaces, as the engine's answer, and
+// clearing it models the owning process exiting. Nothing here unlocks anything:
+// ROTUP has no unlock path, which is the point.
+func TestRecoveryRefusesALockedRepositoryAndResumesWhenItIsReleased(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.establishRepository()
+	source := h.seedSource("documents", 4)
+	batch := h.seedRevisionBatch(source, true)
+	ctx := context.Background()
+
+	interrupted := h.startStuckBackup(source, domain.StageSnapshotCreated, testSnapshotID)
+	if err := h.store.SaveReadSet(ctx, interrupted, nil, []domain.BackupRevisionBatch{{
+		BackupRunID: interrupted, RevisionBatchID: batch.ID, SourceID: source.ID,
+		RelativePath: batch.RelativePath, BatchCreatedAt: batch.CreatedAt, CapturedAt: h.now,
+	}}); err != nil {
+		t.Fatalf("save read-set batches: %v", err)
+	}
+	if _, err := h.service.Recover(ctx); err != nil {
+		t.Fatalf("startup recovery: %v", err)
+	}
+	h.engine.snapshots = []ports.Snapshot{{
+		ID: testSnapshotID, ShortID: shortID(testSnapshotID),
+		Tags: []string{domain.TagROTUP, domain.RunTag(interrupted)},
+		Paths: []string{
+			filepath.Join(h.layout.Root(), "sources", source.StagingRelativePath, "current"),
+			filepath.Join(h.layout.Root(), filepath.FromSlash(batch.RelativePath)),
+		},
+	}}
+
+	// Phase 1: another process holds the repository.
+	h.engine.checkErr = domain.NewError(domain.ErrClassUnavailable, "restic_repository_locked",
+		"the repository check could not proceed because the repository is locked by another operation")
+	unmountsBefore := h.media.unmounts
+
+	runID, err := h.service.StartRepositoryRecovery(ctx, h.repository.ID)
+	if err != nil {
+		t.Fatalf("start recovery: %v", err)
+	}
+	refused := h.run(runID)
+	if refused.Status.Successful() {
+		t.Fatal("recovery succeeded against a repository held by another process")
+	}
+	if refused.ErrorCode != "restic_repository_locked" {
+		t.Fatalf("refused recovery error code = %q, want restic_repository_locked", refused.ErrorCode)
+	}
+	if health := h.repositoryNow().Health; health != domain.RepositoryRecoveryRequired {
+		t.Fatalf("repository health = %s, want RECOVERY_REQUIRED", health)
+	}
+	if still := h.run(interrupted); still.Status.Successful() {
+		t.Fatal("a locked repository still adopted the interrupted backup")
+	}
+	if backup := h.backupRun(interrupted); backup.VerifiedSnapshotID != "" ||
+		backup.Durability == domain.DurabilityAdopted {
+		t.Fatalf("a locked repository granted durability: %#v", backup)
+	}
+	if len(h.coverage(batch.ID)) != 0 {
+		t.Fatal("a locked repository granted revision coverage")
+	}
+	// Refusing is not an excuse to leave the media mounted.
+	if h.media.unmounts <= unmountsBefore {
+		t.Fatal("the disk was not synced and unmounted after the refusal")
+	}
+
+	// Phase 2: the owning process exits and its lock goes with it. Nothing about
+	// the repository changed, so the same recovery must now go through.
+	h.engine.checkErr = nil
+
+	secondID, err := h.service.StartRepositoryRecovery(ctx, h.repository.ID)
+	if err != nil {
+		t.Fatalf("start second recovery: %v", err)
+	}
+	if run := h.run(secondID); !run.Status.Successful() {
+		t.Fatalf("recovery did not resume once the lock was released: %s / %s", run.Status, run.SafeError)
+	}
+	if health := h.repositoryNow().Health; health != domain.RepositoryHealthy {
+		t.Fatalf("repository health after the lock cleared = %s, want HEALTHY", health)
+	}
+	adopted := h.run(interrupted)
+	if !adopted.Status.Successful() {
+		t.Fatalf("the interrupted run was not adopted after the lock cleared: %s", adopted.Status)
+	}
+	coverage := h.coverage(batch.ID)
+	if len(coverage) != 1 || coverage[0].BackupRunID != interrupted ||
+		coverage[0].SnapshotID != testSnapshotID {
+		t.Fatalf("coverage after the lock cleared = %#v", coverage)
+	}
+}
+
 // Recovery is explicit. It never re-runs the backup that was interrupted.
 func TestRecoveryNeverRerunsABackup(t *testing.T) {
 	t.Parallel()

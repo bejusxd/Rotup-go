@@ -18,7 +18,7 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 | M1 skeleton | Implemented; current Go suite and live health endpoint pass. |
 | M2 collection | Implemented; the live daemon collected the real SMB share three more times, including an `archive_then_sync` run that displaced a replaced and a removed file into a recorded revision batch. One reporting defect found and fixed (see below). |
 | M3 media | Implemented; prior loop-device evidence exists, and mount/sync/unmount ran cleanly through the daemon during the loop-image backup run. Physical removal acceptance remains separate. |
-| M4 backup | Implemented, acceptance OPEN. On the real daemon against a loop image: first manual backup, a full changed/deleted round trip, explicit repository verification (real `restic check`), and a controlled graceful interruption whose recovery refused adoption and preserved every existing snapshot. See m4-loop-acceptance.md. Remaining software gates: the crash gap (a dead process leaving a `RUNNING` row), successful adoption of a real unconfirmed snapshot, and the lock-refusal path. Physical USB acceptance is separate and still deferred. |
+| M4 backup | Implemented, acceptance OPEN. On the real daemon against a loop image: first manual backup, a full changed/deleted round trip, explicit repository verification (real `restic check`), and a controlled graceful interruption whose recovery refused adoption and preserved every existing snapshot. Lock refusal is covered by tests only — it cannot be demonstrated live with restic 0.17.3 (exercise 5). See m4-loop-acceptance.md. Remaining software gates: the crash gap (a dead process leaving a `RUNNING` row) and successful adoption of a real unconfirmed snapshot on live media. Physical USB acceptance is separate and still deferred. |
 | M5 scheduler | Not started; held until M4 acceptance and explicit scope review. |
 | M6 rotation | Planned. |
 | M7 reporting | Planned. |
@@ -36,20 +36,18 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
   to `127.0.0.1:8080`. Each restart reuses the captured `ROTUP_*` configuration
   verbatim and logs `applied=0 available=4`, so no migration runs and no empty
   database is created.
-- **The loop device is currently detached and the registered disk reads
-  `DISCONNECTED`.** WSL restarted between operator sessions, which detached
-  `/dev/loop0` and killed the daemon. The 1 GiB image is intact; reattaching it
-  needs `losetup`, i.e. `scripts/prepare-wsl-acceptance.sh` and the operator's
-  own sudo password. Not attempted.
-- Related limitation worth knowing before the next session: a daemon started
-  from a `wsl.exe` invocation does not survive a WSL shutdown. The long-lived one
-  survived earlier only because it had been launched from the operator's own
-  interactive terminal.
-- `/api/v1/setup` now reports `complete: false` solely because
-  `BACKUP_DISK_CONNECTED` is false with the loop device detached; all other steps
-  remain done. System setup still reports broad DrvFS data-directory modes and no
-  installed systemd unit; that is a property of this working-tree fixture, not
-  the approved layout.
+- The loop image is attached again: the coordinator reran the reviewed
+  `scripts/prepare-wsl-acceptance.sh`. Reverified rather than assumed — `lsblk`
+  and the daemon's own disk view both report UUID
+  `063c94b9-bd1e-4496-b70c-85fadc635531`, and the disk reads
+  `AVAILABLE_UNMOUNTED`. The loop node itself is never treated as identity.
+- Standing operational note: a daemon started from a `wsl.exe` invocation does
+  not survive a WSL shutdown, so it has to be relaunched (or started from the
+  operator's own terminal) after one. `.cache/operator/m4-loop/94-restart-after-interruption.sh`
+  does this with the singleton and checksum guards.
+- `/api/v1/setup` reports `complete: true`. System setup still reports broad
+  DrvFS data-directory modes and no installed systemd unit; that is a property of
+  this working-tree fixture, not the approved layout.
 - No live installation, data migration or real-media mutation performed during
   operator takeover. The stored repository password was used once, locally, only
   as a `--password-file` argument pointing at the existing protected secret file
@@ -79,7 +77,12 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
    proved the recovery refused to adopt it: run `72297e78…` ended `INTERRUPTED`
    then `FAILED`/`snapshot_absent`, verification `0f0dd127…` reported 0 adopted
    and 1 abandoned, and all four pre-drill snapshots survived.
-8. Reconcile the live WSL runtime with the approved installation layout, then
+8. Established that lock refusal cannot be demonstrated live with restic 0.17.3
+   and covered it with tests instead: the adapter now proves both real locked
+   signals map to `restic_repository_locked`, and recovery is proven to refuse a
+   locked repository without adopting an otherwise-adoptable backup, then resume
+   once the lock clears.
+9. Reconcile the live WSL runtime with the approved installation layout, then
    resume M4 acceptance only with positively identified test media. Do not treat
    local/fake-media tests as USB acceptance.
 
@@ -170,6 +173,19 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
   nothing was adopted is the 0/1 adopted/abandoned count, the unchanged
   `lastSnapshotId`/`lastSuccessfulBackupAt`, and the interrupted run's own
   refusal — not the health field.
+- Lock-refusal finding, 2026-09-05, worth not rediscovering: ROTUP's verification
+  runs `restic snapshots` and `check` without `--no-lock`, so it takes ordinary
+  non-exclusive locks and only refuses when restic does. Non-exclusive locks
+  coexist — proven with a real `restic backup` frozen mid-run while holding a
+  lock, against which both reads exited 0 — so only an exclusive lock can force
+  the refusal, and every command that takes one rewrites or deletes repository
+  data. There is therefore no safe live demonstration on the acceptance
+  repository, and none is claimed. Covered by
+  `TestLockedRepositoryIsReportedAsUnavailable` and
+  `TestRecoveryRefusesALockedRepositoryAndResumesWhenItIsReleased`, the latter
+  mutation-checked. Live verification `992cf236-211f-4aed-abd2-7f2aebb0ab87`
+  meanwhile returned "5 snapshot(s), 0 adopted, 0 abandoned" with no lock
+  present, all four pre-drill snapshots intact and hashes matching.
 - Incidental finding, not corrected here: five tracked text files carry CRLF in
   this working tree, so WSL git reports them modified while Windows git (with
   `core.autocrlf=true`) reports a clean tree. `git diff --ignore-cr-at-eol` is
@@ -185,16 +201,19 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 
 ## Continuation
 
-Claude task 04 stopped at the subscription session limit on 2026-09-05; the CLI
-reports reset at 22:40 Europe/Warsaw. The coordination heartbeat is PAUSED.
-Preparation reached successful collection `3f53c84d-9e59-49fb-9041-cf5a7a8dea89`
-(staging version 7, about 48 MiB test data). The interruption script was written
-under `.cache/operator/m4-loop/92-interrupt.sh`, but no interruption backup was
-started according to the live run history. Do not count this drill as passed.
-At coordinator inspection the daemon health is OK and the UUID-verified loop
-disk is unmounted. Resume by reviewing task-04 prompt/log and the prepared script,
-then rechecking active runs/media before any action. Last accepted task commit
-is `b6fe2aa`; no M5 work started.
+Task 04 is **finished**, not pending: the interruption drill ran and is recorded
+in m4-loop-acceptance.md (exercise 4, commit `a4940f6`). Do not repeat it. The
+earlier note here about it stopping at a usage limit described a state that no
+longer exists and has been removed so it cannot be re-run by mistake.
+
+Task 05 (lock refusal) is also finished; see exercise 5. Its outcome is a
+negative result about the live fixture that the next operator should not spend
+time rediscovering: with restic 0.17.3 there is **no safe way to hold a lock on
+the acceptance repository that would make ROTUP's verification refuse**, because
+verification only takes non-exclusive locks and non-exclusive locks coexist.
+Do not go looking for one, and in particular do not reach for `prune`,
+`forget --prune`, `repair` or `migrate` to manufacture an exclusive lock on a
+repository holding acceptance evidence.
 
 Read this checkpoint, actual HEAD/status and installation/m4 operations docs.
 Check for active writers before dispatch. Finish the first unresolved queue item,

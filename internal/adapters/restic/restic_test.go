@@ -196,6 +196,45 @@ func TestInspectMapsWrongPassword(t *testing.T) {
 	}
 }
 
+// A repository another live process holds exclusively must be reported as
+// temporarily unavailable, not as damage.
+//
+// This is the only way ROTUP ever learns about a lock: it does not read the
+// lock files itself, it runs `check`/`snapshots` without --no-lock and believes
+// restic's refusal. Both signals restic gives are covered, because they are not
+// interchangeable — a locked repository exits 11 in some paths and exits 1 with
+// an explanatory message in others, and reading only the exit code would let the
+// second case fall through to a generic failure.
+func TestLockedRepositoryIsReportedAsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		result ports.ProcessResult
+	}{
+		{"dedicated exit code", fail(11, "")},
+		{"message only", fail(1, "unable to create lock in backend: repository is already locked exclusively by PID 1234 on host by user")},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			engine, _, spec := testEngine(t, testCase.result)
+			_, err := engine.Check(context.Background(), spec)
+			if err == nil {
+				t.Fatal("a locked repository was reported as checked")
+			}
+			if class := domain.ClassOf(err); class != domain.ErrClassUnavailable {
+				t.Fatalf("error class = %s, want UNAVAILABLE", class)
+			}
+			var typed *domain.Error
+			if !domain.AsError(err, &typed) || typed.Code != "restic_repository_locked" {
+				t.Fatalf("error code = %v, want restic_repository_locked", err)
+			}
+		})
+	}
+}
+
 func TestBackupSucceedsAndParsesSummary(t *testing.T) {
 	t.Parallel()
 
