@@ -17,8 +17,8 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 |---|---|
 | M1 skeleton | Implemented; current Go suite and live health endpoint pass. |
 | M2 collection | Implemented; live UI records successful SMB test and published collection. Not rerun against SMB in this checkpoint. |
-| M3 media | Implemented; prior loop-device evidence exists. Physical removal acceptance remains separate. Registered test disk is currently disconnected. |
-| M4 backup | Implemented, acceptance OPEN. Live UI records no completed disk backup. Requires real SMB/USB, changed/deleted-file round trip, independent restore and interruption evidence per m4-backup.md. |
+| M3 media | Implemented; prior loop-device evidence exists, and mount/sync/unmount ran cleanly through the daemon during the loop-image backup run. Physical removal acceptance remains separate. |
+| M4 backup | Implemented, acceptance OPEN. First manual backup and an independent restore now succeeded on the real daemon against a loop image; see m4-loop-acceptance.md. USB acceptance still requires real removable media, the changed/deleted-file round trip and interruption evidence per m4-backup.md. |
 | M5 scheduler | Not started; held until M4 acceptance and explicit scope review. |
 | M6 rotation | Planned. |
 | M7 reporting | Planned. |
@@ -27,13 +27,16 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 
 ## Current validation
 
-- `go test ./...` and `go vet ./...` passed under Ubuntu WSL.
+- `gofmt -l`, `go vet ./...`, `go test ./...` and both Linux builds passed under
+  Ubuntu WSL at `dd4d8f1` (re-run 2026-09-05, no code changes in this task).
 - Frontend: 28 tests in 4 files passed; TypeScript check passed.
-- Browser `/setup`: 6/8 application steps confirmed; disk disconnected and first
-  backup missing. System setup reports missing runtime directories, old wrapper,
-  missing boot integration, and broad DrvFS data-directory modes.
-- No live installation, secret access, data migration or real-media mutation
-  performed during operator takeover.
+- `/api/v1/setup`: all 8 application steps done, `complete: true`. System setup
+  still reports broad DrvFS data-directory modes and no installed systemd unit;
+  that is a property of this working-tree fixture, not the approved layout.
+- No live installation, data migration or real-media mutation performed during
+  operator takeover. The stored repository password was used once, locally, only
+  as a `--password-file` argument pointing at the existing protected secret file
+  for the independent restore; its value was never read, printed or copied.
 
 ## Work queue
 
@@ -45,9 +48,12 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
    paths fail before writes; existing shared database parent permissions remain.
 3. Implemented account-aware active helper verification: root invokes the probe
    as the selected account; a different unprivileged account cannot claim success.
-4. Reconcile the live WSL runtime with the approved installation layout, then
+4. Implemented and recorded the first manual `BACKUP_LATEST` plus an independent
+   restic restore against the loop-image fixture. Evidence lives in
+   `docs/operations/m4-loop-acceptance.md`.
+5. Reconcile the live WSL runtime with the approved installation layout, then
    resume M4 acceptance only with positively identified test media. Do not treat
-  local/fake-media tests as USB acceptance.
+   local/fake-media tests as USB acceptance.
 
 ## Follow-through evidence and actual blocker
 
@@ -59,9 +65,10 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 - Real setup executed twice in a private user/mount namespace with custom paths:
   first run 14 changes, second run zero changes. Only expected helper invocation
   failure remained (sudo cannot operate normally inside this sandbox).
-- Live WSL has SMB and the existing unprivileged daemon, but no USB/loop disk.
-  `/home/bejo/rotup-test-disks/disk-a.img` is ext4 with UUID
-  `063c94b9-bd1e-4496-b70c-85fadc635531`, matching the registered test disk.
+- Live WSL has SMB and the existing unprivileged daemon. There is still no USB
+  disk; `/home/bejo/rotup-test-disks/disk-a.img` is ext4 with UUID
+  `063c94b9-bd1e-4496-b70c-85fadc635531`, matching the registered test disk, and
+  is now attached as a loop device.
 - `sudo -n true` reports interactive authentication required. Do not bypass this
   through WSL root login. User must enter the password in their terminal.
 - Prepared `scripts/prepare-wsl-acceptance.sh` for this exact existing WSL fixture.
@@ -72,6 +79,20 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 - After the user runs that script through sudo: re-enumerate media, verify UUID
   and UI state, continue existing manual backup/restore evidence. A loop-image
   run must remain explicitly separate from physical USB acceptance.
+- Loop-image run completed on 2026-09-05: run `215e1052-de95-4cfd-825a-2d03e3e3d425`,
+  snapshot `d9f75cf767479ed3c66dde53f24b407855ed4e755c2cf8b90ff9ac3df8eb0a8f`,
+  4 files / 259 bytes, restored independently with matching checksums, staging
+  unchanged, no restic lock left, disk synced and unmounted. It exercised one
+  collection only, no changed/deleted-file round trip and no interruption, so it
+  is explicitly not USB acceptance.
+- `sudo` was not needed for this run: the daemon's existing narrow helper rule
+  covered mount and unmount. No further privilege was requested.
+- Noticed while validating: the compiled `rotup-mounthelper` binary in the
+  repository root is **tracked**, so `go build ./cmd/rotup-mounthelper` dirties
+  the working tree. `.gitignore` anchors `/rotupd` and `/rotupd.exe` but not this
+  one. The accidental rebuild was reverted rather than committed. Untracking the
+  binary and extending `.gitignore` is a separate decision for the coordinator,
+  not part of this task.
 
 ## Continuation
 

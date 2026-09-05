@@ -116,6 +116,12 @@ independent restic restore into a scratch directory using the escrowed password.
 Keep the source and staging unchanged by the restore. Record run IDs, full
 snapshot IDs, UUID, restored-content checks and final unmounted state.
 
+A first manual backup and an independent restore have been run on the real
+daemon against a loop-image fixture and recorded in
+[m4-loop-acceptance.md](m4-loop-acceptance.md). That run is deliberately not
+counted here: it exercised one collection, no changed/deleted-file round trip,
+no interruption and no removable hardware.
+
 Exercise interruption/reconnection on disposable test media, following the M3
 hardware safety procedure, and confirm no premature success or coverage. The
 portable and real-restic service spikes do not prove physical USB removal,
