@@ -18,7 +18,7 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 | M1 skeleton | Implemented; current Go suite and live health endpoint pass. |
 | M2 collection | Implemented; the live daemon collected the real SMB share three more times, including an `archive_then_sync` run that displaced a replaced and a removed file into a recorded revision batch. One reporting defect found and fixed (see below). |
 | M3 media | Implemented; prior loop-device evidence exists, and mount/sync/unmount ran cleanly through the daemon during the loop-image backup run. Physical removal acceptance remains separate. |
-| M4 backup | Implemented, acceptance OPEN. On the real daemon against a loop image: first manual backup, a full changed/deleted round trip, and explicit repository verification (real `restic check`) returning HEALTHY with all four snapshots retained; every snapshot restored independently. See m4-loop-acceptance.md. USB acceptance still requires real removable media, interrupted-run adoption and physical removal evidence per m4-backup.md. |
+| M4 backup | Implemented, acceptance OPEN. On the real daemon against a loop image: first manual backup, a full changed/deleted round trip, explicit repository verification (real `restic check`), and a controlled graceful interruption whose recovery refused adoption and preserved every existing snapshot. See m4-loop-acceptance.md. Remaining software gates: the crash gap (a dead process leaving a `RUNNING` row), successful adoption of a real unconfirmed snapshot, and the lock-refusal path. Physical USB acceptance is separate and still deferred. |
 | M5 scheduler | Not started; held until M4 acceptance and explicit scope review. |
 | M6 rotation | Planned. |
 | M7 reporting | Planned. |
@@ -30,16 +30,26 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 - `gofmt -l`, `go vet ./...`, `go test ./...` and both Linux builds passed under
   Ubuntu WSL, most recently after the collector displaced-object fix.
 - Frontend: 28 tests in 4 files passed; TypeScript check passed.
-- The live WSL test daemon now runs the committed HEAD build: version `6670d28`,
-  pid 57320, user bejo (uid 1000), bound to `127.0.0.1:8080`, executable
-  `.cache/operator/head/rotupd`. It was restarted at an idle, unmounted boundary
-  with SIGTERM only and reuses the previous process's `ROTUP_*` configuration
-  verbatim (same database, staging, secret, rclone, restic and helper paths);
-  the startup log records `applied=0 available=4`, so no migration ran and no
-  empty database was created.
-- `/api/v1/setup`: all 8 application steps done, `complete: true`. System setup
-  still reports broad DrvFS data-directory modes and no installed systemd unit;
-  that is a property of this working-tree fixture, not the approved layout.
+- The live WSL test daemon runs the committed build `6670d28` (code-identical to
+  HEAD; every commit since is documentation). Binary
+  `.cache/operator/head/rotupd`, sha256 `96cfc9bc…`, user bejo (uid 1000), bound
+  to `127.0.0.1:8080`. Each restart reuses the captured `ROTUP_*` configuration
+  verbatim and logs `applied=0 available=4`, so no migration runs and no empty
+  database is created.
+- **The loop device is currently detached and the registered disk reads
+  `DISCONNECTED`.** WSL restarted between operator sessions, which detached
+  `/dev/loop0` and killed the daemon. The 1 GiB image is intact; reattaching it
+  needs `losetup`, i.e. `scripts/prepare-wsl-acceptance.sh` and the operator's
+  own sudo password. Not attempted.
+- Related limitation worth knowing before the next session: a daemon started
+  from a `wsl.exe` invocation does not survive a WSL shutdown. The long-lived one
+  survived earlier only because it had been launched from the operator's own
+  interactive terminal.
+- `/api/v1/setup` now reports `complete: false` solely because
+  `BACKUP_DISK_CONNECTED` is false with the loop device detached; all other steps
+  remain done. System setup still reports broad DrvFS data-directory modes and no
+  installed systemd unit; that is a property of this working-tree fixture, not
+  the approved layout.
 - No live installation, data migration or real-media mutation performed during
   operator takeover. The stored repository password was used once, locally, only
   as a `--password-file` argument pointing at the existing protected secret file
@@ -65,7 +75,11 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
    the running build (a collection now reports 2 displaced objects against its
    2-item revision batch), and exercised the supported verification action with
    a real `restic check`.
-7. Reconcile the live WSL runtime with the approved installation layout, then
+7. Interrupted a real backup mid-restic with SIGTERM on the loop fixture and
+   proved the recovery refused to adopt it: run `72297e78…` ended `INTERRUPTED`
+   then `FAILED`/`snapshot_absent`, verification `0f0dd127…` reported 0 adopted
+   and 1 abandoned, and all four pre-drill snapshots survived.
+8. Reconcile the live WSL runtime with the approved installation layout, then
    resume M4 acceptance only with positively identified test media. Do not treat
    local/fake-media tests as USB acceptance.
 
@@ -133,6 +147,29 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
   while in flight → HEALTHY, and all four snapshots were listed independently
   afterwards with no restic lock left. This is the explicit check path only;
   interrupted-run adoption is still unexercised on live media.
+- Interruption drill, 2026-09-05. Fixtures `m4-interrupt-20260905T171325Z`
+  (48 MiB, collection `3f53c84d…`, state v7) and `m4-interrupt2-20260905T205610Z`
+  (64 MiB, collection `c72a454f…`, state v8). The first attempt caught restic in
+  flight but its confirmation pause outlasted the whole 48 MiB run, so no signal
+  was sent and that backup completed normally as snapshot `e162e467…`; the method
+  was corrected rather than retried blindly. The drill itself: backup
+  `72297e78-b407-44e2-a46a-3a455526d321`, restic `backup` subprocess pid 60498
+  observed with the run's own tag, SIGTERM to daemon pid 57320 at
+  `20:56:30.452Z`, about 135 ms after `resticStartedAt`. Recorded durably as
+  `INTERRUPTED`/`restic_canceled`, stage `RESTIC_RUNNING`, durability
+  `UNPROVEN`, empty candidate and verified snapshot IDs, null
+  synced/unmount/durable timestamps; repository `SUSPECT`, last proven snapshot
+  untouched. Restart as pid 540 with a checksum-verified identical binary and
+  configuration. Verification `0f0dd127-681d-47bc-b723-ad1057365e4c` returned
+  "5 snapshot(s), 0 interrupted backup(s) adopted, 1 abandoned"; the interrupted
+  run became `FAILED`/`snapshot_absent`. Independently: all four pre-drill
+  snapshots present, no snapshot tagged with the interrupted run, no restic lock,
+  snapshot `fcade47e…` restored with hashes matching pre-drill values, and every
+  pre-existing share file byte-identical.
+- Read `HEALTHY` after that recovery as "verified", not "adopted". The proof that
+  nothing was adopted is the 0/1 adopted/abandoned count, the unchanged
+  `lastSnapshotId`/`lastSuccessfulBackupAt`, and the interrupted run's own
+  refusal — not the health field.
 - Incidental finding, not corrected here: five tracked text files carry CRLF in
   this working tree, so WSL git reports them modified while Windows git (with
   `core.autocrlf=true`) reports a clean tree. `git diff --ignore-cr-at-eol` is

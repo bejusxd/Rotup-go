@@ -8,7 +8,7 @@ real daemon; it proves nothing about physical removal, power loss, or a real USB
 controller. The acceptance drill required by [m4-backup.md](m4-backup.md)
 remains open.
 
-Three exercises are recorded, in order:
+Four exercises are recorded, in order:
 
 1. [The first manual backup](#exercise-1-the-first-manual-backup) and its
    independent restore.
@@ -18,6 +18,8 @@ Three exercises are recorded, in order:
    snapshots.
 3. [The counter fix on the HEAD build and explicit verification](#exercise-3-head-build-counter-fix-and-explicit-verification),
    after bringing the daemon to the committed fix.
+4. [A controlled graceful interruption of a real backup](#exercise-4-controlled-graceful-interruption-and-refused-adoption),
+   and the recovery that refused to adopt it.
 
 ## Fixture
 
@@ -390,9 +392,196 @@ Mounting once more through the daemon and driving restic directly:
 - Staging is unchanged by the verification and the restore, and the share is
   byte-identical outside this task's subfixture.
 
+## Exercise 4: controlled graceful interruption and refused adoption
+
+A real backup was stopped mid-flight by sending `SIGTERM` — and only `SIGTERM` —
+to the test daemon while its own restic subprocess was running. No `SIGKILL`, no
+signal to restic itself, no loop detach, no raw device or filesystem operation,
+no SQL and no failpoint were used.
+
+### Before anything was interrupted
+
+Captured first, so every later claim has something to be checked against.
+
+| Item | Value |
+|---|---|
+| Commit | `b6fe2aa`; `git diff 6670d28..HEAD -- ':!docs'` empty, so the running binary is code-identical to HEAD |
+| Daemon | pid 57320, user bejo (uid 1000), `.cache/operator/head/rotupd`, sha256 `96cfc9bc…`, version `6670d28`, `127.0.0.1:8080` |
+| Runs | 0 non-terminal |
+| Disk | `AVAILABLE_UNMOUNTED`, no ROTUP mount |
+| Image UUID | `063c94b9-bd1e-4496-b70c-85fadc635531`, agreed independently by `lsblk` and by the daemon's disk view |
+| Repository | `HEALTHY`, restic ID `1d80cb0f…` |
+| Snapshots | 4: `3caa1587…`, `d9f75cf7…`, `f41cbc26…`, `fcade47e…` |
+| Locks | none |
+| Free space | 905 MiB on the 1 GiB test image |
+
+### First attempt: caught in flight, but not interrupted
+
+Using the reused 48 MiB fixture `m4-interrupt-20260905T171325Z` (collection
+`3f53c84d-9e59-49fb-9041-cf5a7a8dea89`, state version 7), backup run
+`16023f40-7463-461d-917b-d2c865f1e850` was started. Its restic subprocess was
+found as pid 60099 at `ELAPSED 00:00`, carrying that run's own
+`rotup-run:16023f40…` tag, and the repository's data directory grew from 21,875
+to 50,364,130 bytes over the following two seconds.
+
+The signal was nevertheless never sent. The script paused two seconds to
+*confirm* the write before signalling, and restic finished all 48 MiB inside
+that window. The script reported the limitation and exited rather than claiming
+a drill, and the backup completed normally: snapshot
+`e162e467b5477a6359566f73b87baf86bfb08b1162cb1c2b9edc3b51ca538990`,
+`DURABLE_SUCCESS`, 17 files / 50,332,336 bytes.
+
+The method was then corrected rather than retried blindly: signal immediately on
+sighting, and assemble the in-flight proof from samples either side of the
+signal. Because the first attempt's data was now in the repository, repeating it
+would have deduplicated to nothing, so a second fixture of fresh incompressible
+data was needed.
+
+### Second attempt: the drill
+
+New fixture `m4-interrupt2-20260905T205610Z`, 64 MiB of fresh random bytes — the
+upper bound the task allowed. Collection `c72a454f-4cb9-4134-8e16-4d4f9eb7b402`,
+state version 8, 16 files / 117,440,757 bytes staged.
+
+| Event | Time (UTC) |
+|---|---|
+| Backup run `72297e78-b407-44e2-a46a-3a455526d321` requested | `20:56:29.158` |
+| restic `backup` subprocess started (`resticStartedAt`) | `20:56:30.317` |
+| `SIGTERM` sent to daemon pid 57320 | `20:56:30.452` |
+| Run recorded terminal (`finishedAt`) | `20:56:30.535` |
+| Daemon process gone | ~2 s later |
+
+The signal landed roughly 135 ms into the restic backup. The subprocess was
+observed live as pid 60498 at `ELAPSED 00:00`, running the daemon's configured
+restic binary with `backup` and this run's own `rotup-run:72297e78…` tag, and
+reading the staging read-set paths. Its password reached it through
+`--password-file` pointing at a transient runtime file, so no secret appeared in
+the process arguments.
+
+**Honest caveat on the in-flight proof.** The repository byte samples either side
+of the signal were both 50,364,130 — no growth. That is expected at 135 ms in:
+restic was still scanning, not yet writing packs. The evidence that this was a
+genuine in-flight interruption is therefore the live tagged `backup` subprocess
+plus the daemon's own record of stage `RESTIC_RUNNING`, not byte growth. Nothing
+here demonstrates an interruption *after* pack data had been committed.
+
+The daemon's shutdown log for that second:
+
+```
+22:56:30.453 INFO  shutdown requested
+22:56:30.547 WARN  backup did not succeed  run_id=72297e78-…  stage=RESTIC_RUNNING  status=INTERRUPTED
+22:56:30.588 INFO  application stopped
+```
+
+With the daemon down: port 8080 free, no `rotupd` process, no restic process,
+and **no ROTUP mount left behind** — the bounded failure-cleanup path unmounted
+the disk on its way out.
+
+### What the interrupted run durably claims
+
+| Field | Value |
+|---|---|
+| Status | `INTERRUPTED` (`restic_canceled`, class `CANCELLATION`) |
+| Summary | "the backup was canceled before it finished" |
+| Stage | `RESTIC_RUNNING` |
+| Durability | `UNPROVEN` |
+| `candidateSnapshotId` | empty |
+| `verifiedSnapshotId` | empty |
+| `syncedAt` / `unmountVerifiedAt` / `durableSuccessAt` | all null |
+| `filesProcessed` / `engineErrors` | 0 / 0 |
+
+The read-set *was* recorded — state version 8 plus both revision batches — which
+is the design: it is captured under the barrier before restic starts, precisely
+so a later recovery has something to check a snapshot against. Recording what a
+run intended to read is not a claim that it read it.
+
+The repository went to `SUSPECT` with reason "the backup was canceled before it
+finished", while `lastSnapshotId` (`e162e467…`) and `lastSuccessfulBackupAt`
+(`20:55:01.829Z`) stayed pointing at the last *proven* success.
+
+### Restart
+
+| Item | Value |
+|---|---|
+| pid | 540, user bejo, uid 1000 |
+| Binary | the same file, sha256 `96cfc9bc…` verified against the recorded build |
+| Configuration | diffed against the pre-drill capture: identical |
+| Version | `6670d28` |
+| Migrations | `applied=0 available=4` |
+
+Startup recovery logged nothing about interrupted runs, and that is correct
+rather than a gap: the graceful path had already written the terminal row and
+released the media before SQLite closed. **This drill therefore exercised the
+graceful shutdown boundary, not the crash gap** where a `RUNNING` row survives a
+dead process. That second case remains unexercised on live media.
+
+### Recovery refused to adopt
+
+| Field | Value |
+|---|---|
+| Verify run | `0f0dd127-681d-47bc-b723-ad1057365e4c` (`VERIFY` / `RECOVERY`) |
+| Status | `SUCCEEDED`, 3694 ms |
+| Summary | `repository verified: 5 snapshot(s), 0 interrupted backup(s) adopted, 1 abandoned` |
+| Health | `SUSPECT` → `HEALTHY` |
+
+`HEALTHY` here does **not** mean the interrupted backup was adopted, and the
+record says so from three independent directions: the summary reports 0 adopted
+and 1 abandoned; `lastSnapshotId` and `lastSuccessfulBackupAt` are unchanged, so
+no coverage moved; and the interrupted run's own final state is a refusal —
+
+| Field | After recovery |
+|---|---|
+| Status | `FAILED` |
+| Code | `snapshot_absent` |
+| Summary | "this backup was interrupted and recovery found no snapshot for it in the repository" |
+| Stage | `FAILED` |
+| Durability | `UNPROVEN` |
+
+### Independent preservation check
+
+Driving restic directly, with the disk mounted and unmounted only through the
+daemon's supported actions:
+
+- `restic cat config` → `1d80cb0f…`, the recorded identity.
+- 5 snapshots. **All four pre-drill snapshots are present**; the fifth is
+  `e162e467…` from the uninterrupted first attempt. The interruption deleted
+  nothing.
+- **No snapshot carries `rotup-run:72297e78-b407-44e2-a46a-3a455526d321`** — the
+  cancelled restic wrote none, which is exactly why abandonment was the honest
+  outcome rather than adoption.
+- `restic list locks` → empty. The cancelled restic left no lock, so no lock
+  needed to be reported or worked around.
+- Snapshot `fcade47e…` restored (31 files/dirs, 643 B): both earlier fixtures and
+  both revision batches reproduce their pre-drill hashes exactly —
+  `92978719…`/`eaae7be4…` and `978f9460…`/`5344fe5e…` in the current tree,
+  `0fb3a18d…`/`cd51ec7c…` and `d887b5c3…`/`ad875374…` in the batches.
+- Every pre-drill file in the share is byte-identical; the only additions are
+  this drill's two fixtures.
+
 ## Final state
 
-- Daemon: `6670d28`, pid 57320, user bejo (uid 1000), `127.0.0.1:8080`,
+- Daemon: `6670d28`, pid 501, user bejo (uid 1000), `127.0.0.1:8080`,
+  `overall_status: ok`, single instance, no non-terminal run.
+- **WSL was restarted between sessions** (uptime 0 at the time of writing), which
+  detached the loop device and killed the daemon started from a `wsl.exe` call.
+  The daemon was restored with the same guarded script, same binary checksum and
+  same configuration. The 1 GiB image file is intact and untouched.
+- The registered disk therefore reads `DISCONNECTED` and onboarding reads
+  `complete: false`: the `BACKUP_DISK_CONNECTED` step is false while the loop
+  device is detached. Reattaching it needs `losetup`, which needs root — that is
+  `scripts/prepare-wsl-acceptance.sh` and the operator's own sudo password. It
+  was not attempted here.
+- Repository `331f4905…` is `HEALTHY` (`connected: false`), `lastSnapshotId`
+  `e162e467b5477a6359566f73b87baf86bfb08b1162cb1c2b9edc3b51ca538990`,
+  `lastSuccessfulBackupAt` `2026-09-05T20:55:01.829Z`.
+- No ROTUP mount exists and no restic lock exists.
+
+### Superseded by exercise 4
+
+The lines below describe the state at the end of exercise 3 and are kept because
+the earlier sections refer to them.
+
+- Daemon at that point: `6670d28`, pid 57320, `127.0.0.1:8080`,
   `overall_status: ok`, no non-terminal run.
 - Onboarding is `complete: true`; `FIRST_BACKUP_COMPLETED` is `done: true`.
 - Repository `331f4905…` is `HEALTHY`, verified by run `aaa23ae9…`,
@@ -413,10 +602,15 @@ Mounting once more through the daemon and driving restic directly:
 
 - Loop image, not removable hardware: no physical disconnect, no surprise
   removal, no power loss, no USB controller or hotplug path was exercised.
-- Interruption and reconnection behaviour has still not been exercised, and
-  neither has adoption of an unconfirmed snapshot. Exercise 3 proves the
-  verification path on a healthy repository, which is a different thing: it
-  never had an interrupted backup to resolve.
+- Exercise 4 interrupted a backup at the **graceful shutdown** boundary. The
+  crash gap — a process that dies leaving a `RUNNING` row and possibly a
+  committed snapshot behind — is still unexercised, and so is successful
+  adoption. The interruption landed ~135 ms into restic, before any pack data
+  was written, so nothing here shows recovery reconciling a repository that
+  really did change.
+- Because the cancelled restic left no lock, the lock-refusal path
+  (recovery declining while another process holds the repository) is also
+  unexercised.
 - `restic check` here is structural only. It is not `--read-data`, so the pack
   file contents are not certified. No retention, forget or prune was run.
 - The data is tiny (at most 12 files, 643 bytes) with no large files, hard links,
@@ -460,3 +654,14 @@ backup), `70-verify-repository.sh` (the supported verification action),
 `71-independent-final.sh` (independent snapshot inventory, lock check and
 restore). `07-suite.sh` runs the full Linux validation and now builds into
 `.cache/operator` so the tracked repository root is never written to.
+
+Exercise 4: `90-pre-drill.sh` (everything the drill is checked against),
+`91-drill-fixture.sh` and `93-drill-fixture-2.sh` (the two sized fixtures and
+their collections), `92-interrupt.sh` (start the backup, wait for the daemon's
+own restic `backup` subprocess, send SIGTERM and nothing else — it refuses to
+claim a drill if the subprocess cannot be caught in flight),
+`94-restart-after-interruption.sh` (guarded start half of the restart approach,
+verifying the binary checksum and the singleton conditions),
+`95-inspect-durable-state.sh` (what the interrupted run claims and must not
+claim), `96-preservation-check.sh` (snapshot inventory, lock evidence, restore
+and hash comparison against pre-drill values).
