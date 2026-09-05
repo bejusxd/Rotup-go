@@ -1,6 +1,6 @@
 # ROTUP operator checkpoint
 
-Updated: 2026-09-05. Baseline reviewed: `f7c6de8`.
+Updated: 2026-09-05. Initial baseline: `f7c6de8`; first operator fix: `d4ff71b`.
 
 ## Operating mandate
 
@@ -40,13 +40,38 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 1. Implemented installer fix: reject unsafe directory ancestors and stop dependent
    runtime/data/config mutations after parent refusal. Isolated regression tests
    cover redirected data, runtime, configuration and `/var/lib` directories.
-2. Resolve setup custom-path mismatch: provisioning and generated service config
-   use defaults while inspection honors environment overrides.
-3. Ensure active helper verification tests the intended service account, rather
-   than reporting a root invocation as evidence for that account.
+2. Implemented custom-path correction: selected paths drive provisioning,
+   generated environment, mount dependencies and inspection. Unsafe/overlapping
+   paths fail before writes; existing shared database parent permissions remain.
+3. Implemented account-aware active helper verification: root invokes the probe
+   as the selected account; a different unprivileged account cannot claim success.
 4. Reconcile the live WSL runtime with the approved installation layout, then
    resume M4 acceptance only with positively identified test media. Do not treat
-   local/fake-media tests as USB acceptance.
+  local/fake-media tests as USB acceptance.
+
+## Follow-through evidence and actual blocker
+
+- Both real-restic suites passed (7 adapter and 9 service scenarios), including
+  cancellation, lost completion commit, recovery, identity mismatch and simulated
+  disappearance. These use temporary repositories, not physical USB.
+- Full Go suite and vet passed after the two additional fixes; Linux daemon and
+  helper built in `.cache/operator/`.
+- Real setup executed twice in a private user/mount namespace with custom paths:
+  first run 14 changes, second run zero changes. Only expected helper invocation
+  failure remained (sudo cannot operate normally inside this sandbox).
+- Live WSL has SMB and the existing unprivileged daemon, but no USB/loop disk.
+  `/home/bejo/rotup-test-disks/disk-a.img` is ext4 with UUID
+  `063c94b9-bd1e-4496-b70c-85fadc635531`, matching the registered test disk.
+- `sudo -n true` reports interactive authentication required. Do not bypass this
+  through WSL root login. User must enter the password in their terminal.
+- Prepared `scripts/prepare-wsl-acceptance.sh` for this exact existing WSL fixture.
+  It verifies the image UUID/type, installs the built helper/wrapper and tmpfiles
+  rule, restores root-owned runtime directories, verifies the existing sudo rule
+  as bejo, and attaches the image only if not already associated. It does not
+  format, mount, change sudo rules, migrate data or restart the daemon.
+- After the user runs that script through sudo: re-enumerate media, verify UUID
+  and UI state, continue existing manual backup/restore evidence. A loop-image
+  run must remain explicitly separate from physical USB acceptance.
 
 ## Continuation
 

@@ -80,6 +80,9 @@ const MediaMountRoot = media.MountRoot
 // Layout is one installation's resolved identity: which account runs the
 // daemon, and which group must be able to traverse the runtime and data trees.
 type Layout struct {
+	StagingRoot  string
+	SecretRoot   string
+	DatabasePath string
 	// User is the unprivileged account the daemon runs as.
 	User string
 	// Group is the account's primary group.
@@ -165,14 +168,15 @@ func TmpfilesContent(group string) (string, error) {
 // a path or a duration. No password, token or credential reference is ever
 // written here, and setup refuses to carry one in.
 func EnvFileContent(l Layout, rclonePath, resticPath, lsblkPath string) string {
+	staging, secret, database, _ := (Options{StagingRoot: l.StagingRoot, SecretRoot: l.SecretRoot, DatabasePath: l.DatabasePath}).resolved()
 	var b strings.Builder
 	b.WriteString("# Managed by `rotupd setup`. Non-secret configuration only.\n")
 	b.WriteString("# Passwords are never stored here: source and repository secrets live in\n")
-	b.WriteString("# the secret store at " + SecretRoot + ".\n")
+	b.WriteString("# the secret store at " + secret + ".\n")
 	b.WriteString("ROTUP_HTTP_ADDR=127.0.0.1:8080\n")
-	b.WriteString("ROTUP_DB_PATH=" + DatabasePath + "\n")
-	b.WriteString("ROTUP_STAGING_ROOT=" + StagingRoot + "\n")
-	b.WriteString("ROTUP_SECRET_ROOT=" + SecretRoot + "\n")
+	b.WriteString("ROTUP_DB_PATH=" + database + "\n")
+	b.WriteString("ROTUP_STAGING_ROOT=" + staging + "\n")
+	b.WriteString("ROTUP_SECRET_ROOT=" + secret + "\n")
 	b.WriteString("ROTUP_MOUNT_HELPER=" + WrapperPath + "\n")
 	if lsblkPath != "" {
 		b.WriteString("ROTUP_LSBLK_PATH=" + lsblkPath + "\n")
@@ -219,7 +223,8 @@ func UnitContent(l Layout) (string, error) {
 	b.WriteString("# systemd-tmpfiles-setup creates /run/rotup root-owned before this starts.\n")
 	b.WriteString("After=local-fs.target network-online.target systemd-tmpfiles-setup.service\n")
 	b.WriteString("Wants=network-online.target\n")
-	b.WriteString("RequiresMountsFor=" + DataDir + "\n")
+	staging, secret, database, _ := (Options{StagingRoot: l.StagingRoot, SecretRoot: l.SecretRoot, DatabasePath: l.DatabasePath}).resolved()
+	b.WriteString("RequiresMountsFor=" + DataDir + " " + staging + " " + secret + " " + database + "\n")
 	b.WriteString("\n[Service]\n")
 	b.WriteString("Type=simple\n")
 	b.WriteString("User=" + l.User + "\n")

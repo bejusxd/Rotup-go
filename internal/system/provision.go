@@ -66,6 +66,7 @@ func Setup(ctx context.Context, host Host, options SetupOptions) (Report, Inspec
 	if !ok {
 		return report, Inspect(ctx, host, options.Options)
 	}
+	options.StagingRoot, options.SecretRoot, options.DatabasePath = layout.StagingRoot, layout.SecretRoot, layout.DatabasePath
 	tools := discoverTools(host, options.Options)
 
 	provisionDaemon(host, options, &report)
@@ -108,7 +109,13 @@ func resolveLayout(host Host, options SetupOptions, report *Report) (Layout, boo
 		report.OK(GroupPlatform, "setup.account", "Service account",
 			fmt.Sprintf("%s (uid %d, group %s gid %d)", account, uid, group, gid))
 	}
-	return Layout{User: account, Group: group, UID: uid, GID: gid}, true
+	layout := Layout{User: account, Group: group, UID: uid, GID: gid}
+	layout.StagingRoot, layout.SecretRoot, layout.DatabasePath, _ = options.Options.resolved()
+	if err := validateSetupPaths(host, layout); err != nil {
+		report.Fail(GroupData, "setup.paths", "Data paths", err.Error(), "Use absolute, separate ROTUP directories with safe ancestors. Setup has made no changes.")
+		return Layout{}, false
+	}
+	return layout, true
 }
 
 func discoverTools(host Host, options Options) Tools {
@@ -334,12 +341,22 @@ func provisionData(host Host, options SetupOptions, layout Layout, report *Repor
 		DataDir, DataDirMode, layout.UID, layout.GID) {
 		return
 	}
+	// Existing custom database parents can be shared; never chmod/chown them.
+	parent := filepath.Dir(layout.DatabasePath)
+	if parent != DataDir {
+		state, _ := host.Lstat(parent)
+		if !state.Exists {
+			if !ensureDirectory(host, options, report, GroupData, "setup.database", "Database directory", parent, DataDirMode, layout.UID, layout.GID) {
+				return
+			}
+		}
+	}
 	ensureDirectory(host, options, report, GroupData, "setup.staging", "Staging root",
-		StagingRoot, DataDirMode, layout.UID, layout.GID)
+		layout.StagingRoot, DataDirMode, layout.UID, layout.GID)
 	// The secret store's mode is the whole protection for stored credentials.
 	// Setup creates it correctly; it never reads, lists or copies its contents.
 	ensureDirectory(host, options, report, GroupData, "setup.secrets", "Secret store",
-		SecretRoot, SecretDirMode, layout.UID, layout.GID)
+		layout.SecretRoot, SecretDirMode, layout.UID, layout.GID)
 }
 
 func provisionConfig(host Host, options SetupOptions, layout Layout, tools Tools, report *Report) {
@@ -528,4 +545,55 @@ func safeError(err error) string {
 		return pathErr.Op + ": " + pathErr.Err.Error()
 	}
 	return filepath.Base(err.Error())
+}
+
+// validateSetupPaths runs before any provisioning, including privileged files.
+// Restrict spelling to literal systemd/environment path characters: setup does
+// not accept shell syntax or systemd specifiers in persistent data locations.
+func validateSetupPaths(host Host, l Layout) error {
+	paths := []string{l.StagingRoot, l.SecretRoot, l.DatabasePath}
+	for _, p := range paths {
+		if !filepath.IsAbs(p) || filepath.Clean(p) != p {
+			return fmt.Errorf("data paths must be clean absolute paths")
+		}
+		for _, c := range p {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("/._-", c)) {
+				return fmt.Errorf("data paths may contain only letters, digits, slash, dot, underscore and hyphen")
+			}
+		}
+		for _, reserved := range []string{"/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/dev", "/proc", "/sys", "/run", "/boot"} {
+			if pathContains(reserved, p) {
+				return fmt.Errorf("data path overlaps a system directory")
+			}
+		}
+		for _, shared := range []string{"/", "/var", "/var/lib", "/home", "/root", "/tmp", "/mnt", "/media", "/srv", "/opt", DataDir} {
+			if p == shared {
+				return fmt.Errorf("data paths must not name a shared parent directory")
+			}
+		}
+		if filepath.Dir(p) == "/home" {
+			return fmt.Errorf("use a dedicated directory inside the account home")
+		}
+		// Inspect each component without following redirected parents.
+		components := strings.Split(strings.TrimPrefix(p, "/"), "/")
+		current := ""
+		for i, part := range components {
+			current += "/" + part
+			state, err := host.Lstat(current)
+			if err != nil || state.IsSymlink || (state.Exists && (i < len(components)-1 || p != l.DatabasePath) && !state.IsDir) {
+				return fmt.Errorf("data path contains an unsafe directory or symbolic link")
+			}
+			if i == len(components)-1 && p == l.DatabasePath && state.Exists && state.IsDir {
+				return fmt.Errorf("database path names a directory")
+			}
+		}
+	}
+	if pathContains(l.StagingRoot, l.SecretRoot) || pathContains(l.SecretRoot, l.StagingRoot) || pathContains(l.StagingRoot, l.DatabasePath) || pathContains(l.SecretRoot, l.DatabasePath) || pathContains(l.DatabasePath, l.StagingRoot) || pathContains(l.DatabasePath, l.SecretRoot) {
+		return fmt.Errorf("staging, secrets and database paths must not overlap")
+	}
+	return nil
+}
+
+func pathContains(parent, child string) bool {
+	return parent == child || strings.HasPrefix(child, parent+"/")
 }

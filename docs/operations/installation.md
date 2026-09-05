@@ -285,3 +285,21 @@ Installing for real requires an interactive `sudo` password on this
 workstation, so `/etc/sudoers.d/rotup-mounthelper`, `/usr/lib/tmpfiles.d` and
 the systemd unit have not been written to the live WSL host. The existing
 hand-provisioned helper and sudo rule there are unchanged.
+
+### Custom data locations
+
+Setup honors `ROTUP_STAGING_ROOT`, `ROTUP_SECRET_ROOT`, and `ROTUP_DB_PATH`
+through the same options used by doctor. It provisions those locations and writes
+those exact paths into the generated environment and service mount dependencies.
+Use clean absolute paths containing only letters, digits, `/`, `.`, `_`, and `-`.
+Setup rejects system/shared roots, symbolic links, and overlapping staging,
+secret, or database locations before making installation changes. Use dedicated
+ROTUP directories. Existing custom database parent directories keep their mode
+and ownership; the service account must already have the access it needs there.
+Setup does not migrate existing application data. An edited environment file is
+preserved unless `--force` is supplied; review its paths before enabling a service.
+
+Active helper checks run as the selected service account. When doctor or setup
+is root, it switches to that account through noninteractive sudo before invoking
+the wrapper with no arguments. A different unprivileged caller receives an
+unverified failure instead of a success attributed to the wrong account.

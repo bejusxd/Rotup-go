@@ -280,7 +280,7 @@ func inspectHelper(ctx context.Context, host Host, options Options, in *Inspecti
 	inspectSudoers(host, in)
 
 	if options.Active {
-		probeHelperInvocation(ctx, host, report)
+		probeHelperInvocation(ctx, host, in.Layout.User, report)
 	} else {
 		report.OK(GroupHelper, "helper.invocation", "Helper invocation",
 			"not probed; use --active to run the wrapper once with no arguments")
@@ -409,8 +409,28 @@ func auditSudoersRule(content string) string {
 // answers with its usage refusal before it looks at privilege or touches any
 // device, so this proves the whole path — wrapper, sudo policy, helper binary —
 // without mounting anything.
-func probeHelperInvocation(ctx context.Context, host Host, report *Report) {
-	output, code, err := host.Run(ctx, WrapperPath)
+func probeHelperInvocation(ctx context.Context, host Host, account string, report *Report) {
+	// Resolve again rather than trusting a zero-valued Layout UID after a
+	// failed platform check. A root caller must exercise the daemon account's
+	// sudo policy, not root's permission to invoke the helper.
+	uid, _, _, lookupErr := host.LookupAccount(account)
+	if ValidateAccountName(account) != nil || lookupErr != nil || uid < 0 {
+		report.Fail(GroupHelper, "helper.invocation", "Helper invocation",
+			"not verified: the service account could not be resolved",
+			"Pass an existing service account with --user and rerun doctor --active.")
+		return
+	}
+	name, args := WrapperPath, []string(nil)
+	if host.Euid() != uid {
+		if host.Euid() != 0 {
+			report.Fail(GroupHelper, "helper.invocation", "Helper invocation",
+				"not verified: this process is not running as the selected service account "+account,
+				"Run doctor --active as the service account, or run it through sudo with --user.")
+			return
+		}
+		name, args = "/usr/bin/sudo", []string{"-n", "-u", account, "--", WrapperPath}
+	}
+	output, code, err := host.Run(ctx, name, args...)
 	switch {
 	case err != nil:
 		report.Fail(GroupHelper, "helper.invocation", "Helper invocation",
@@ -418,7 +438,7 @@ func probeHelperInvocation(ctx context.Context, host Host, report *Report) {
 			"Run `sudo rotupd setup`, then confirm the service account may run it.")
 	case strings.Contains(output, "\"error_code\":\"usage\""):
 		report.OK(GroupHelper, "helper.invocation", "Helper invocation",
-			"the wrapper reached the helper through sudo and it refused an empty request, as expected")
+			"as "+account+", the wrapper reached the helper through sudo and it refused an empty request, as expected")
 	case strings.Contains(output, "password is required"), strings.Contains(output, "a password is required"):
 		report.Fail(GroupHelper, "helper.invocation", "Helper invocation",
 			"sudo asked for a password, so the NOPASSWD rule does not apply to this account",
