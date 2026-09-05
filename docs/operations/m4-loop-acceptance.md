@@ -2,12 +2,13 @@
 
 **This is not M4 USB acceptance.** Everything recorded here was produced against
 a loop-mounted disk image inside WSL2, not a physically removable disk. It
-proves that manual backup, the `archive_then_sync` changed/deleted round trip
-and independent restore work end to end on the real daemon; it proves nothing
-about physical removal, power loss, or a real USB controller. The acceptance
-drill required by [m4-backup.md](m4-backup.md) remains open.
+proves that manual backup, the `archive_then_sync` changed/deleted round trip,
+explicit repository verification and independent restore work end to end on the
+real daemon; it proves nothing about physical removal, power loss, or a real USB
+controller. The acceptance drill required by [m4-backup.md](m4-backup.md)
+remains open.
 
-Two exercises are recorded, in order:
+Three exercises are recorded, in order:
 
 1. [The first manual backup](#exercise-1-the-first-manual-backup) and its
    independent restore.
@@ -15,13 +16,15 @@ Two exercises are recorded, in order:
    with a baseline backup, a mutation, a second collection that archived the
    displaced objects, a second backup, and an independent restore of both
    snapshots.
+3. [The counter fix on the HEAD build and explicit verification](#exercise-3-head-build-counter-fix-and-explicit-verification),
+   after bringing the daemon to the committed fix.
 
 ## Fixture
 
 | Item | Value |
 |---|---|
-| Commit at run time | `dd4d8f1` (exercise 1), `0bc13c1` (exercise 2) |
-| Daemon | unprivileged `rotupd-ui` on `http://127.0.0.1:8080`, `ROTUP_DEV_MODE=false` |
+| Commit at run time | `dd4d8f1` (exercise 1), `0bc13c1` (exercise 2), `6670d28` (exercise 3) |
+| Daemon | unprivileged, loopback `http://127.0.0.1:8080`, `ROTUP_DEV_MODE=false` |
 | restic | 0.17.3 (`.cache/m4-spike/restic_0.17.3_linux_amd64`) |
 | rclone | 1.75.0 |
 | Backing image | `/home/bejo/rotup-test-disks/disk-a.img`, attached as `/dev/loop0` |
@@ -266,34 +269,160 @@ The defect was in an operator-facing count only. The live run recorded above
 predates the fix, so run `0aacb8c0…` keeps `filesDeletedOrArchived: 1` in its
 history; a rebuilt daemon reports 2.
 
+## Exercise 3: HEAD build, counter fix and explicit verification
+
+### Bringing the test daemon to HEAD
+
+Exercises 1 and 2 ran on a daemon built before the displaced-object fix. It was
+replaced with a build of `6670d28` at an idle, unmounted boundary.
+
+The restart script refuses to act unless every one of these holds, so the
+conditions below are enforced rather than assumed: exactly one `rotupd` owned by
+this account, its executable under `.cache/`, bound to `127.0.0.1:8080`, holding
+`/mnt/c/dev/rotup/rotup-dev.db`, with no non-terminal run, no ROTUP mount, the
+disk `AVAILABLE_UNMOUNTED` and the repository not busy. All held.
+
+| Item | Before | After |
+|---|---|---|
+| pid | 16929 | 57320 |
+| executable | `.cache/ui/rotupd-ui` | `.cache/operator/head/rotupd` |
+| reported version | `dev` | `6670d28` |
+| user / uid | bejo | bejo, uid 1000 |
+| listener | `127.0.0.1:8080` | `127.0.0.1:8080` |
+
+The old process was stopped with `SIGTERM` only and exited in 2 s. The
+replacement started only after the port was free and no `rotupd` remained, so
+two daemons never held the database at once. Its `ROTUP_*` configuration was
+read out of the old process and reapplied verbatim; diffing the two sets reports
+them identical, covering the database, staging root, secret root, rclone, restic
+and mount-helper paths. Nothing was chmod-ed, migrated or created: the startup
+log records `SQLite migrations complete applied=0 available=4`, which is an
+existing database being opened, not a fresh one.
+
+The binary was built into `.cache/operator/head/`, never the tracked repository
+root, and `git status` after the build shows the root binaries untouched.
+
+Startup recovery found nothing to interrupt — the shutdown was clean — and the
+repository stayed `HEALTHY` with `lastSnapshotId` `f41cbc26…` across the
+restart.
+
+One incidental finding: WSL git reports five tracked text files (`README.md`,
+`docs/operations/installation.md`, `003_m3_removable_media.sql`, `layout.html`,
+`runs.html`) as modified while Windows git reports a clean tree. Windows git has
+`core.autocrlf=true` and WSL git has it unset, so those files carry CRLF in the
+working tree. `git diff --ignore-cr-at-eol` is empty for every one of them, so
+only carriage returns differ. This is pre-existing and was not introduced or
+corrected here; the restart guard was written to allow CR-only differences while
+still refusing on a real edit.
+
+### The counter fix, live
+
+A second uniquely named, test-only subfixture was created in the share:
+`/home/bejo/rotup-smb-source/m4-counterfix-20260905T164543Z`, holding
+`steady.txt` (never changed), `edited.txt` (replaced) and `dropped.txt`
+(removed). The exercise-2 fixture and every pre-existing file were hashed before
+and after and are unchanged.
+
+| File | SHA-256 at creation | After mutation |
+|---|---|---|
+| `steady.txt` | `5344fe5ef1d1e69373a97fecd2cc6c8672a7e72ced7153b28d7e0a5abd3aedb8` | unchanged |
+| `edited.txt` | `d887b5c380e99e69fe9821224f5627451c7ffc3eff3c17cb47df00cd6122377e` | `978f946051c5e6f72518b7f2bba1d2014216777f4f64e9c08a9da53118344003` |
+| `dropped.txt` | `ad8753741fe0b2d3c256fe646e6f6db016a4f1222e683c53aea9bcd2f20e738f` | removed |
+
+| Run | ID | Result |
+|---|---|---|
+| Baseline collection | `04e82d07-f241-4e67-aa05-dfc918c1d9ea` | state version 5, 8 files / 258 bytes, `filesDeletedOrArchived: 0`, no new batch |
+| Archiving collection | `978acb47-d88e-44fb-ab30-ab1b91c33be9` | state version 6, 7 files / 207 bytes, **`filesDeletedOrArchived: 2`** |
+| Revision batch | `026e9bc2-0dfe-4cc0-a899-fec66626cac6` | 2 items, 98 bytes, `reconciliationCompleted: true` |
+| Backup | `64b44e52-73f7-447e-bf45-9499aebcbe13` | snapshot `fcade47ef29fe242e8a7769db3db47b7a72e733fdb50e7fe4052eb917612b783`, 12 files / 643 bytes, `DURABLE_SUCCESS`, 0 engine errors |
+
+This is the live confirmation of `6670d28`: the run's reported count and its own
+revision batch now both say 2, where the pre-fix build reported 1 against a
+2-item batch. The baseline collection still reports 0, so the change did not
+turn an unrelated counter into a displacement.
+
+The backup's read-set is state version 6 plus **both** revision batches —
+`abd67870…` from exercise 2 and `026e9bc2…` from this one — so the coverage this
+snapshot claims spans every displaced object still in staging.
+
+### Explicit verification and recovery
+
+The supported verification action (`POST /api/v1/repositories/{id}/recover`) was
+run against the healthy repository. It is the real path: it mounts the disk,
+checks the recorded restic identity, lists snapshots, runs a structural
+`restic check`, and syncs and unmounts *before* recording anything.
+
+| Field | Value |
+|---|---|
+| Run ID | `aaa23ae9-1b7a-452c-a221-b4a4b63677dc` |
+| Kind / trigger | `VERIFY` / `RECOVERY` |
+| Status | `SUCCEEDED`, 4216 ms |
+| Summary | `repository verified: 4 snapshot(s), 0 interrupted backup(s) adopted, 0 abandoned` |
+| Health during | `SUSPECT` (observed live while in flight) |
+| Health after | `HEALTHY`, empty reason |
+
+The transition to `SUSPECT` and back is the design: verification refuses to
+leave a repository claiming health it has not just proved. With no interrupted
+backup pending, adoption correctly did nothing — 0 adopted, 0 abandoned. The
+repository's `lastSnapshotId` and `lastSuccessfulBackupAt` were not disturbed,
+and the repository page now carries this run as its `lastVerification`.
+
+**This is not interrupted-run adoption.** No crash was simulated, no SQLite row
+was edited, no lock was cleared, and nothing was pruned, forgotten, unlocked or
+initialized. Adoption of an unconfirmed snapshot remains unexercised on live
+media.
+
+### Independent confirmation afterwards
+
+Mounting once more through the daemon and driving restic directly:
+
+- `restic cat config` → `1d80cb0f…`, the recorded identity.
+- `restic snapshots` → exactly 4, all established snapshots retained:
+  `d9f75cf7…`, `3caa1587…`, `f41cbc26…`, `fcade47e…`. Verification deleted
+  nothing.
+- `restic list locks` → empty. Neither the verification nor any restore left a
+  lock behind.
+- Restoring `fcade47e…` (31 files/dirs, 643 B) reproduces the archived
+  `edited.txt` at `d887b5c3…` and `dropped.txt` at `ad875374…` under this task's
+  batch, the exercise-2 batch's `change.txt` at `0fb3a18d…` and `remove.txt` at
+  `cd51ec7c…`, and a current tree equal to both the live share and the live
+  staging tree. `dropped.txt` is absent from the current tree.
+- Staging is unchanged by the verification and the restore, and the share is
+  byte-identical outside this task's subfixture.
+
 ## Final state
 
+- Daemon: `6670d28`, pid 57320, user bejo (uid 1000), `127.0.0.1:8080`,
+  `overall_status: ok`, no non-terminal run.
 - Onboarding is `complete: true`; `FIRST_BACKUP_COMPLETED` is `done: true`.
-- Repository `331f4905…` is `HEALTHY`, `lastSnapshotId`
-  `f41cbc262e078ecbb083d00600fe20181a8afcee701d21d0167cb62315688efb`,
-  `lastSuccessfulBackupAt` `2026-09-05T16:17:49.938Z`. Three snapshots exist.
-- `restic list locks` was empty after exercise 1; no backup or restore in either
+- Repository `331f4905…` is `HEALTHY`, verified by run `aaa23ae9…`,
+  `lastSnapshotId`
+  `fcade47ef29fe242e8a7769db3db47b7a72e733fdb50e7fe4052eb917612b783`,
+  `lastSuccessfulBackupAt` `2026-09-05T16:46:31.681Z`. Four snapshots exist and
+  all four were listed independently after verification.
+- `restic list locks` is empty. No backup, restore or verification in any
   exercise left a lock that would block a later recovery.
 - The disk was synced and unmounted through the daemon after every step, on
   success and on the failure path. Final status `AVAILABLE_UNMOUNTED`,
   `busy: false`, no ROTUP entry in the host mount table. The image remains
   attached to `/dev/loop0`.
-- The test fixture is deliberately left in place, in the share, in staging and
+- Both test fixtures are deliberately left in place, in the share, in staging and
   in the snapshots, so this evidence stays reproducible.
 
 ## Limitations
 
 - Loop image, not removable hardware: no physical disconnect, no surprise
   removal, no power loss, no USB controller or hotplug path was exercised.
-- Interruption and reconnection behaviour has still not been exercised.
-- No `restic check`/recovery path, no retention, forget or prune was run.
-- The data is tiny (at most 8 files, 456 bytes) with no large files, hard links,
-  unusual permissions or non-ASCII names. The round trip covered one replaced
-  file and one removed file; it did not cover renames, directory removal, or a
-  file that reappears after being archived.
-- The `filesDeletedOrArchived` fix is proven by the regression test and the
-  rclone probe, not by a live re-run: the daemon under test was the pre-fix
-  build, and re-running it would only have added more state to this fixture.
+- Interruption and reconnection behaviour has still not been exercised, and
+  neither has adoption of an unconfirmed snapshot. Exercise 3 proves the
+  verification path on a healthy repository, which is a different thing: it
+  never had an interrupted backup to resolve.
+- `restic check` here is structural only. It is not `--read-data`, so the pack
+  file contents are not certified. No retention, forget or prune was run.
+- The data is tiny (at most 12 files, 643 bytes) with no large files, hard links,
+  unusual permissions or non-ASCII names. The round trips covered one replaced
+  file and one removed file each; they did not cover renames, directory removal,
+  or a file that reappears after being archived.
 - The daemon ran from a working-tree build with data directories on DrvFS
   (`/mnt/c`), whose permission modes the system setup check still reports as too
   broad. That is a fixture property, not the approved installation layout.
@@ -321,3 +450,13 @@ rclone counter probe), `31-affected-validation.sh` and
 `32-prove-regression-catches.sh` (validation for the fix and proof the
 regression fails without it), `40-restore-roundtrip.sh` (independent restore and
 comparison of both snapshots).
+
+Exercise 3: `50-inspect-daemon.sh` (daemon identity, idle boundary, media and
+repository state), `51-restart-daemon.sh` (guarded build, graceful stop and
+restart with the identical configuration), `52-diagnose-dirty.sh` (the CRLF
+finding), `60-create-subfixture.sh`, `61-collect.sh <label>` (collection only),
+`62-mutate-subfixture.sh`, `20-cycle.sh counterfix` (archiving collection and
+backup), `70-verify-repository.sh` (the supported verification action),
+`71-independent-final.sh` (independent snapshot inventory, lock check and
+restore). `07-suite.sh` runs the full Linux validation and now builds into
+`.cache/operator` so the tracked repository root is never written to.

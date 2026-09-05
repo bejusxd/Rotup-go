@@ -18,7 +18,7 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 | M1 skeleton | Implemented; current Go suite and live health endpoint pass. |
 | M2 collection | Implemented; the live daemon collected the real SMB share three more times, including an `archive_then_sync` run that displaced a replaced and a removed file into a recorded revision batch. One reporting defect found and fixed (see below). |
 | M3 media | Implemented; prior loop-device evidence exists, and mount/sync/unmount ran cleanly through the daemon during the loop-image backup run. Physical removal acceptance remains separate. |
-| M4 backup | Implemented, acceptance OPEN. On the real daemon against a loop image: first manual backup, then a full changed/deleted round trip (baseline backup, mutation, archiving collection, second backup) with both snapshots restored independently; see m4-loop-acceptance.md. USB acceptance still requires real removable media and interruption evidence per m4-backup.md. |
+| M4 backup | Implemented, acceptance OPEN. On the real daemon against a loop image: first manual backup, a full changed/deleted round trip, and explicit repository verification (real `restic check`) returning HEALTHY with all four snapshots retained; every snapshot restored independently. See m4-loop-acceptance.md. USB acceptance still requires real removable media, interrupted-run adoption and physical removal evidence per m4-backup.md. |
 | M5 scheduler | Not started; held until M4 acceptance and explicit scope review. |
 | M6 rotation | Planned. |
 | M7 reporting | Planned. |
@@ -30,6 +30,13 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 - `gofmt -l`, `go vet ./...`, `go test ./...` and both Linux builds passed under
   Ubuntu WSL, most recently after the collector displaced-object fix.
 - Frontend: 28 tests in 4 files passed; TypeScript check passed.
+- The live WSL test daemon now runs the committed HEAD build: version `6670d28`,
+  pid 57320, user bejo (uid 1000), bound to `127.0.0.1:8080`, executable
+  `.cache/operator/head/rotupd`. It was restarted at an idle, unmounted boundary
+  with SIGTERM only and reuses the previous process's `ROTUP_*` configuration
+  verbatim (same database, staging, secret, rclone, restic and helper paths);
+  the startup log records `applied=0 available=4`, so no migration ran and no
+  empty database was created.
 - `/api/v1/setup`: all 8 application steps done, `complete: true`. System setup
   still reports broad DrvFS data-directory modes and no installed systemd unit;
   that is a property of this working-tree fixture, not the approved layout.
@@ -54,7 +61,11 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 5. Implemented and recorded the `archive_then_sync` changed/deleted round trip
    against the real SMB share and the loop repository, and fixed the displaced
    object under-count it exposed.
-6. Reconcile the live WSL runtime with the approved installation layout, then
+6. Brought the live test daemon to HEAD, confirmed the displaced-object fix on
+   the running build (a collection now reports 2 displaced objects against its
+   2-item revision batch), and exercised the supported verification action with
+   a real `restic check`.
+7. Reconcile the live WSL runtime with the approved installation layout, then
    resume M4 acceptance only with positively identified test media. Do not treat
    local/fake-media tests as USB acceptance.
 
@@ -110,6 +121,24 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
   `TestArchivingRunReportsEveryDisplacedObject` fails against the old expression.
   No archived, restored or backed-up bytes were affected; the defect was in an
   operator-facing count only.
+- On the HEAD build, second subfixture `m4-counterfix-20260905T164543Z`:
+  collections `04e82d07…` (state version 5, 0 displaced) and `978acb47…` (state
+  version 6, **2 displaced**, revision batch `026e9bc2-0dfe-4cc0-a899-fec66626cac6`,
+  2 items / 98 bytes). Backup `64b44e52…` → snapshot `fcade47e…`, 12 files /
+  643 bytes, covering both revision batches. The pre-fix under-count is fixed on
+  the running daemon, not only in tests.
+- Explicit verification run `aaa23ae9-1b7a-452c-a221-b4a4b63677dc`
+  (`VERIFY`/`RECOVERY`) succeeded: "repository verified: 4 snapshot(s), 0
+  interrupted backup(s) adopted, 0 abandoned". Health moved HEALTHY → SUSPECT
+  while in flight → HEALTHY, and all four snapshots were listed independently
+  afterwards with no restic lock left. This is the explicit check path only;
+  interrupted-run adoption is still unexercised on live media.
+- Incidental finding, not corrected here: five tracked text files carry CRLF in
+  this working tree, so WSL git reports them modified while Windows git (with
+  `core.autocrlf=true`) reports a clean tree. `git diff --ignore-cr-at-eol` is
+  empty for all of them. Any WSL tooling that gates on a clean tree needs to
+  allow CR-only differences or the line endings need normalising — a decision
+  for the coordinator.
 - Noticed while validating: the compiled `rotup-mounthelper` binary in the
   repository root is **tracked**, so `go build ./cmd/rotup-mounthelper` dirties
   the working tree. `.gitignore` anchors `/rotupd` and `/rotupd.exe` but not this
