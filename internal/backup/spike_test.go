@@ -65,10 +65,18 @@ func requireResticSpike(t *testing.T) string {
 // of the scripted engine.
 func newSpikeHarness(t *testing.T) *harness {
 	t.Helper()
+	return newSpikeHarnessAt(t, t.TempDir())
+}
+
+// newSpikeHarnessAt builds the spike harness over a caller-chosen root instead
+// of a private temporary directory, so two processes — or one process before and
+// after a crash — can open the same database, staging tree, secret store and
+// stand-in mount point. Everything still lives inside a directory the test owns.
+func newSpikeHarnessAt(t *testing.T, root string) *harness {
+	t.Helper()
 	binary := requireResticSpike(t)
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	root := t.TempDir()
 
 	store, err := sqlite.Open(ctx, filepath.Join(root, "rotup.db"), logger)
 	if err != nil {
@@ -91,7 +99,7 @@ func newSpikeHarness(t *testing.T) *harness {
 	h := &harness{
 		t:       t,
 		store:   store,
-		media:   newFakeMedia(t),
+		media:   newFakeMediaAt(t, root),
 		layout:  layout,
 		barrier: staging.NewBarrier(),
 		secrets: secretStore,

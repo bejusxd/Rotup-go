@@ -107,6 +107,24 @@ recovery), lost completion commits, missing roots, wrong identity, damaged
 repositories and cancellation after observing restic's repository lock. No
 timing-based cancellation skip is counted as a pass.
 
+One spike crosses a real process boundary. `TestSpikeCrashedBackupIsSweptThenAdopted`
+runs the orchestration in a child process, parks it inside `SyncAndUnmount` —
+after restic has really written the snapshot and the candidate and verified
+snapshot are committed, before anything is marked synced or complete — and then
+kills that child with `SIGKILL`. A fresh service opens the same database and must
+work out what happened from what is durably recorded:
+
+- the abandoned `RUNNING` row is swept to `INTERRUPTED` and the repository to
+  `SUSPECT`, with no success and no coverage granted by the sweep itself,
+- only the explicit recovery adopts, and only after independently listing the
+  real snapshot and checking it against the recorded read-set,
+- adoption happens exactly once; a repeated recovery does not duplicate coverage,
+- the adopted snapshot is restored with the restic binary directly and its bytes
+  compared, rather than asking ROTUP to confirm its own work.
+
+This is the only test that exercises a genuinely dead process. The media is still
+the fake lease, so it says nothing about mount, flush or unmount on hardware.
+
 ## Still pending before declaring M4 complete
 
 Execute the manual steps above on the Linux target with a **real SMB share and

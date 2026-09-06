@@ -153,7 +153,16 @@ type fakeMedia struct {
 
 func newFakeMedia(t *testing.T) *fakeMedia {
 	t.Helper()
-	mountPoint := filepath.Join(t.TempDir(), "media")
+	return newFakeMediaAt(t, t.TempDir())
+}
+
+// newFakeMediaAt places the stand-in mount point under a caller-chosen root.
+// The crash spike needs this: its worker and its parent are separate processes
+// and must agree on where the repository lives, which a per-process temporary
+// directory cannot give them.
+func newFakeMediaAt(t *testing.T, root string) *fakeMedia {
+	t.Helper()
+	mountPoint := filepath.Join(root, "media")
 	if err := os.MkdirAll(mountPoint, 0o700); err != nil {
 		t.Fatalf("create fake mount point: %v", err)
 	}

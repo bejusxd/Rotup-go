@@ -18,7 +18,7 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 | M1 skeleton | Implemented; current Go suite and live health endpoint pass. |
 | M2 collection | Implemented; the live daemon collected the real SMB share three more times, including an `archive_then_sync` run that displaced a replaced and a removed file into a recorded revision batch. One reporting defect found and fixed (see below). |
 | M3 media | Implemented; prior loop-device evidence exists, and mount/sync/unmount ran cleanly through the daemon during the loop-image backup run. Physical removal acceptance remains separate. |
-| M4 backup | Implemented, acceptance OPEN. On the real daemon against a loop image: first manual backup, a full changed/deleted round trip, explicit repository verification (real `restic check`), and a controlled graceful interruption whose recovery refused adoption and preserved every existing snapshot. Lock refusal is covered by tests only — it cannot be demonstrated live with restic 0.17.3 (exercise 5). See m4-loop-acceptance.md. Remaining software gates: the crash gap (a dead process leaving a `RUNNING` row) and successful adoption of a real unconfirmed snapshot on live media. Physical USB acceptance is separate and still deferred. |
+| M4 backup | Implemented, acceptance OPEN. See the evidence matrix below for what is proven and on what media. Live loop-image work covers manual backup, the changed/deleted round trip, explicit verification and a graceful interruption. The process-crash sweep-and-adopt path is proven across a real process boundary but on fake media; lock refusal is fault-injected because it is not demonstrable live. Physical USB acceptance is separate and still deferred. |
 | M5 scheduler | Not started; held until M4 acceptance and explicit scope review. |
 | M6 rotation | Planned. |
 | M7 reporting | Planned. |
@@ -53,6 +53,37 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
   as a `--password-file` argument pointing at the existing protected secret file
   for the independent restore; its value was never read, printed or copied.
 
+## M4 evidence matrix
+
+What is actually proven, by what, and on what. "Fake media" means the package's
+stand-in disk lease: real restic, real SQLite, real orchestration, no mount.
+
+| Behaviour | Evidence | Media |
+|---|---|---|
+| Manual backup to durable success | live loop-image run + `TestSpikeManualBackupReachesDurableSuccess` | loop image / fake |
+| Changed + deleted round trip into a revision batch | live loop-image exercise 2 | loop image |
+| Displaced-object count matches its batch | live exercise 3 + `TestArchivingRunReportsEveryDisplacedObject` | loop image / none |
+| Explicit verification, real `restic check` | live runs `aaa23ae9…`, `0f0dd127…`, `992cf236…` | loop image |
+| Graceful interruption → refused adoption | live exercise 4 (run `72297e78…`) | loop image |
+| **Process crash → sweep → adoption** | **`TestSpikeCrashedBackupIsSweptThenAdopted` (SIGKILL across a real process boundary)** | **fake** |
+| Locked repository → recovery fails closed, resumes on release | `TestRecoveryRefusesALockedRepositoryAndResumesWhenItIsReleased`, `TestLockedRepositoryIsReportedAsUnavailable` | none (fault injection; not demonstrable live, see exercise 5) |
+| Cancellation after restic starts | `TestSpikeServiceCancellationAfterResticStarts` | fake |
+| Lost completion commit | `TestSpikeCompletionCommitFailureIsRecoverableWithoutAnotherBackup` | fake |
+| Wrong identity / damaged repository / missing roots | spike suite | fake |
+
+Remaining **software** gaps:
+
+- Adoption after a crash has been proven only on fake media. The live loop-image
+  equivalent would need an ungraceful kill of a daemon holding the acceptance
+  fixture, which no task has authorised.
+- No `--read-data` verification anywhere: `restic check` is structural only.
+- Round trips have never covered renames, directory removal, or a file that
+  reappears after being archived.
+
+Deferred, and not substitutable by any of the above: **physical USB acceptance** —
+real removal, power loss, hotplug, and Linux mount permissions on real hardware.
+A green spike suite and a green loop-image run are not evidence about hardware.
+
 ## Work queue
 
 1. Implemented installer fix: reject unsafe directory ancestors and stop dependent
@@ -82,7 +113,12 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
    signals map to `restic_repository_locked`, and recovery is proven to refuse a
    locked repository without adopting an otherwise-adoptable backup, then resume
    once the lock clears.
-9. Reconcile the live WSL runtime with the approved installation layout, then
+9. Closed the process-crash gap with `TestSpikeCrashedBackupIsSweptThenAdopted`:
+   a child process is killed with `SIGKILL` at the durability boundary, and a
+   fresh service sweeps the abandoned `RUNNING` row, grants nothing on its own,
+   then adopts exactly once on explicit recovery with the restored bytes checked
+   by the restic binary directly. Fake media, so still not USB acceptance.
+10. Reconcile the live WSL runtime with the approved installation layout, then
    resume M4 acceptance only with positively identified test media. Do not treat
    local/fake-media tests as USB acceptance.
 
