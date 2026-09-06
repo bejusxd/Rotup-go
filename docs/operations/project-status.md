@@ -256,6 +256,13 @@ why, not as outstanding work. The only open item is 11.
 
 ## Continuation
 
+2026-09-06 coordinator checkpoint: task08 (M5 plan, docs only) hit the Claude
+subscription limit; CLI reports reset 09:00 Europe/Warsaw. Resume scheduled for
+09:01, with no polling before then. `docs/operations/m5-plan.md` is an uncommitted
+draft, not an approved plan. No M5 implementation started. Resume task08 to finish
+the plan and review its proposed product decisions before implementation; do not
+treat its disk-selection or timeout proposals as accepted architecture.
+
 All operator tasks through the M4 readiness review are finished. Nothing in the
 queue above is waiting to be executed except item 11, which needs a coordinator
 decision rather than work.
