@@ -304,3 +304,16 @@ Read this checkpoint, actual HEAD/status and installation/m4 operations docs.
 Check for active writers before dispatch. Finish the first unresolved queue item,
 review its diff and tests, commit a coherent checkpoint, then update this file.
 Do not start future milestones or infer acceptance from a green unit test suite.
+
+### Coordinator checkpoint — 2026-09-06 10:03 Europe/Warsaw
+
+Task09 (`af7b8bc`, M5 slice 1) was reviewed by the coordinator; independent
+SQLite/domain tests passed. Task10 (slice 2, pure schedule arithmetic) stopped
+at the Claude subscription limit before producing tracked changes. The working
+tree is clean; slice 2 is not implemented. Prompt and result are retained in
+`.cache/operator/claude-task-10.txt` and `.jsonl`.
+
+Claude reports reset 2026-09-06 14:00 Europe/Warsaw (1788696000). Resume task10
+at 14:01, without polling or switching executors during the wait and without
+paid overage. After a successful resume restore 15-minute coordination. The two
+product decisions listed above remain pending; they do not block this slice.
