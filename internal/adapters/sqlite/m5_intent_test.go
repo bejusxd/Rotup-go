@@ -198,6 +198,105 @@ func TestClaimScheduledRunRollsBackWhenTheScheduleIsGone(t *testing.T) {
 	}
 }
 
+// occurrenceIntent builds a claim for one specific occurrence, so a test can
+// order two distinct occurrences deliberately instead of hoping a race lands the
+// interesting way round.
+func occurrenceIntent(runID, key, nominal string, next time.Time) ScheduledIntent {
+	at := time.Date(2026, time.September, 7, 0, 30, 0, 0, time.UTC)
+	return ScheduledIntent{
+		Run: domain.Run{
+			ID: runID, Kind: domain.RunKindCollection,
+			TriggerKind: domain.RunTriggerScheduled, Status: domain.RunStatusPending,
+			RequestedAt: at, UpdatedAt: at,
+		},
+		IdempotencyKey: key,
+		ScheduleID:     "sched-1",
+		JobID:          "job-1",
+		NominalDueAt:   nominal,
+		NextRunAt:      next,
+	}
+}
+
+// A claim that was computed for an earlier occurrence but commits later must not
+// drag the schedule backwards.
+//
+// Concurrent callers racing for the *same* occurrence are settled by the unique
+// key and prove nothing about this: here the two callers hold different
+// occurrences, both legitimate, and the only question is whose bookkeeping
+// survives. If the older one wins, the schedule is left pointing at a due time
+// that has already been claimed, and its recorded last run is a lie until some
+// later tick happens to correct it.
+func TestClaimScheduledRunDoesNotRegressBookkeepingFromAStaleClaim(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	if _, err := store.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	scheduleFixture(t, store)
+
+	tuesday := time.Date(2026, time.September, 8, 0, 30, 0, 0, time.UTC)
+	wednesday := time.Date(2026, time.September, 9, 0, 30, 0, 0, time.UTC)
+
+	// The newer occurrence commits first.
+	if claimed, err := store.ClaimScheduledRun(ctx,
+		occurrenceIntent("run-tue", "key-tue", "2026-09-08T02:30", wednesday)); err != nil || !claimed {
+		t.Fatalf("claim the newer occurrence: %v / %v", claimed, err)
+	}
+
+	// Now a caller that computed the *earlier* occurrence commits late.
+	claimed, err := store.ClaimScheduledRun(ctx,
+		occurrenceIntent("run-mon", "key-mon", "2026-09-07T02:30", tuesday))
+	if err != nil {
+		t.Fatalf("a stale claim errored: %v", err)
+	}
+	if !claimed {
+		t.Fatal("the stale claim did not create its own run")
+	}
+
+	// Its run is legitimate and stays: that occurrence really was due.
+	if run, _ := store.Run(ctx, "run-mon"); run == nil {
+		t.Fatal("the stale claim's run was discarded")
+	}
+	// The bookkeeping, however, must still describe the newer occurrence.
+	if nominal := scalar[string](t, store,
+		`SELECT last_nominal_run_at FROM schedules WHERE id = 'sched-1'`); nominal != "2026-09-08T02:30" {
+		t.Fatalf("a stale claim regressed last_nominal_run_at to %q", nominal)
+	}
+	if next := scalar[string](t, store,
+		`SELECT next_run_at FROM schedules WHERE id = 'sched-1'`); next != formatTime(wednesday) {
+		t.Fatalf("a stale claim regressed next_run_at to %q", next)
+	}
+}
+
+// Reconciliation caches a next occurrence; it must never move one backwards
+// either, for the same reason.
+func TestSetScheduleNextRunOnlyMovesForward(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	if _, err := store.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	scheduleFixture(t, store)
+
+	at := time.Date(2026, time.September, 6, 9, 0, 0, 0, time.UTC)
+	later := time.Date(2026, time.September, 9, 0, 30, 0, 0, time.UTC)
+	earlier := time.Date(2026, time.September, 7, 0, 30, 0, 0, time.UTC)
+
+	if err := store.SetScheduleNextRun(ctx, "sched-1", later, at); err != nil {
+		t.Fatalf("set next run: %v", err)
+	}
+	// A reconciliation pass holding a stale read tries to put it back.
+	if err := store.SetScheduleNextRun(ctx, "sched-1", earlier, at); err != nil {
+		t.Fatalf("a stale reconciliation errored: %v", err)
+	}
+	if next := scalar[string](t, store,
+		`SELECT next_run_at FROM schedules WHERE id = 'sched-1'`); next != formatTime(later) {
+		t.Fatalf("a stale reconciliation moved next_run_at back to %q", next)
+	}
+}
+
 // Both sweep queries must select every status the domain calls active. A status
 // missing from either is a crashed run nothing will ever reconcile.
 func TestActiveRunQueriesCoverEveryActiveStatus(t *testing.T) {

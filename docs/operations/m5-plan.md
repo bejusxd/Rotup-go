@@ -440,6 +440,30 @@ neither pass would correct it. Nothing can reach that state today — slice 3 ad
 no way to edit a schedule — but **the slice that adds editing must recompute
 `next_run_at` as part of the edit**, not rely on reconciliation to notice.
 
+**Review correction — schedule bookkeeping only moves forward.** The first
+version updated `last_nominal_run_at` and `next_run_at` unconditionally. The
+unique key settles two callers racing for the *same* occurrence, but says nothing
+about two callers holding *different* ones: each inserts its own run
+legitimately, and whichever commits last won the bookkeeping. A claim computed
+for Monday that committed after Tuesday's therefore dragged the schedule back to
+Monday, leaving `next_run_at` pointing at an occurrence already claimed and
+`last_nominal_run_at` naming the wrong run. Both regressions were reproduced with
+ordered claims before being fixed.
+
+The claim now advances only when the incoming nominal is at or after the stored
+one, and distinguishes the two reasons a row might not move: the schedule being
+gone still rolls the run back, while the schedule merely being further ahead
+keeps the run — that occurrence really was due — and logs that the bookkeeping
+was left alone. `SetScheduleNextRun` gained the same forward-only rule.
+
+The comparison is on the nominal identity, not the instant, and that is load
+bearing. Nominals are canonical fixed-width `YYYY-MM-DDTHH:MM`, so text order is
+chronological order — a direct payoff of slice 2's canonical-form validation.
+Stored instants are `RFC3339Nano`, whose fractional part is variable width, so
+comparing *those* as SQL text would be wrong: `…:00.5Z` sorts before `…:00Z`
+because `.` precedes `Z`. `SetScheduleNextRun` has no nominal available, so it
+reads and compares as `time.Time` inside the write transaction instead.
+
 Next: **slice 4**, the resource coordinator — named locks over the existing
 barrier, source locks and disk leases, acquired in the globally sorted order.
 

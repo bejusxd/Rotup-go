@@ -142,6 +142,14 @@ type ScheduledIntent struct {
 // not an error: the bookkeeping still advances, because it advances to exactly
 // the values the winning caller computed, and leaving it behind would make this
 // schedule retry a due time that has already been claimed.
+//
+// The bookkeeping only ever moves forward. Two callers holding *different*
+// occurrences are not settled by the unique key — each inserts its own run
+// legitimately — so without a guard a caller computed for Monday that commits
+// after Tuesday's would drag the schedule back to Monday, leaving next_run_at
+// pointing at a due time that has already been claimed and last_nominal_run_at
+// describing the wrong run. The stale caller's run is still correct and is kept;
+// only its view of where the schedule has got to is discarded.
 func (s *Store) ClaimScheduledRun(ctx context.Context, intent ScheduledIntent) (bool, error) {
 	claimed := false
 	err := s.withWriteTx(ctx, func(tx *sql.Tx) error {
@@ -175,12 +183,24 @@ func (s *Store) ClaimScheduledRun(ctx context.Context, intent ScheduledIntent) (
 		}
 		claimed = ownerID == run.ID
 
+		// The comparison is on the nominal identity, not on next_run_at.
+		// Nominal values are canonical fixed-width "YYYY-MM-DDTHH:MM", so text
+		// order is chronological order. Stored instants are RFC3339Nano, whose
+		// fractional part has no fixed width, and comparing *those* as text
+		// would be wrong: "…:00.5Z" sorts before "…:00Z" because '.' precedes
+		// 'Z'.
+		//
+		// "<=" rather than "<" keeps the same-occurrence duplicate idempotent:
+		// rewriting identical values is a harmless no-op that still reports one
+		// affected row, which is what distinguishes "already ahead" from "the
+		// schedule is gone" below.
 		result, err := tx.ExecContext(ctx, `
 			UPDATE schedules
 			SET last_nominal_run_at = ?, next_run_at = ?, updated_at = ?
-			WHERE id = ?`,
+			WHERE id = ?
+			  AND (last_nominal_run_at IS NULL OR last_nominal_run_at <= ?)`,
 			intent.NominalDueAt, formatTime(intent.NextRunAt),
-			formatTime(run.UpdatedAt), intent.ScheduleID)
+			formatTime(run.UpdatedAt), intent.ScheduleID, intent.NominalDueAt)
 		if err != nil {
 			return fmt.Errorf("advance schedule %q: %w", intent.ScheduleID, err)
 		}
@@ -188,11 +208,26 @@ func (s *Store) ClaimScheduledRun(ctx context.Context, intent ScheduledIntent) (
 		if err != nil {
 			return fmt.Errorf("confirm schedule %q advanced: %w", intent.ScheduleID, err)
 		}
-		if affected != 1 {
-			// The schedule vanished under us. Rolling back is the only safe
-			// answer: committing the run alone would leave work nothing owns.
-			return fmt.Errorf("schedule %q no longer exists", intent.ScheduleID)
+		if affected == 1 {
+			return nil
 		}
+
+		// No row moved. Either the schedule is gone, which must roll the run
+		// back because committing it alone would leave work nothing owns, or the
+		// schedule is simply further ahead than this caller, which is not a
+		// failure and must keep the run it legitimately created.
+		var ahead string
+		switch err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(last_nominal_run_at, '') FROM schedules WHERE id = ?`,
+			intent.ScheduleID).Scan(&ahead); {
+		case errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("schedule %q no longer exists", intent.ScheduleID)
+		case err != nil:
+			return fmt.Errorf("inspect schedule %q: %w", intent.ScheduleID, err)
+		}
+		s.logger.Info("a scheduled claim did not advance its schedule because it is already further ahead",
+			"schedule_id", intent.ScheduleID, "claimed_nominal", intent.NominalDueAt,
+			"schedule_nominal", ahead)
 		return nil
 	})
 	if err != nil {
@@ -203,14 +238,51 @@ func (s *Store) ClaimScheduledRun(ctx context.Context, intent ScheduledIntent) (
 
 // SetScheduleNextRun updates only the cached next occurrence. Reconciliation
 // uses it to recompute due times without claiming anything.
+//
+// Like a claim, it only moves forward. Reconciliation reads a schedule, computes
+// against the clock and writes back, so a pass holding a stale read could
+// otherwise undo an advance a claim made in between and re-offer a due time that
+// has already been taken. Nothing reaches that today — reconciliation skips
+// schedules that are already due, and a claim cannot advance one that is not —
+// but the invariant is cheap to state and the alternative is a bug that only
+// appears once the dispatcher runs both concurrently.
+//
+// The comparison happens here rather than in the WHERE clause because stored
+// instants are RFC3339Nano: the fractional part is variable width, so text order
+// is not chronological order. Reading and comparing inside the write transaction
+// is exact, and the transaction is already serialized against other writers.
+//
+// A schedule whose weekdays or local time were edited would legitimately need to
+// move backwards. Nothing can edit one yet; the slice that adds editing must
+// recompute this value as part of the edit rather than expect reconciliation to
+// walk it back.
 func (s *Store) SetScheduleNextRun(ctx context.Context, scheduleID string, nextRunAt time.Time,
 	updatedAt time.Time) error {
 
 	return s.withWriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
+		var current sql.NullString
+		switch err := tx.QueryRowContext(ctx,
+			`SELECT next_run_at FROM schedules WHERE id = ?`, scheduleID).Scan(&current); {
+		case errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("schedule %q no longer exists", scheduleID)
+		case err != nil:
+			return fmt.Errorf("read next run for schedule %q: %w", scheduleID, err)
+		}
+		if current.Valid {
+			existing, err := parseTime(current)
+			if err != nil {
+				return err
+			}
+			if !existing.IsZero() && !nextRunAt.After(existing) {
+				s.logger.Info("a reconciliation did not move a schedule that is already further ahead",
+					"schedule_id", scheduleID, "computed", formatTime(nextRunAt),
+					"schedule_next_run_at", formatTime(existing))
+				return nil
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
 			UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ?`,
-			formatTime(nextRunAt), formatTime(updatedAt), scheduleID)
-		if err != nil {
+			formatTime(nextRunAt), formatTime(updatedAt), scheduleID); err != nil {
 			return fmt.Errorf("set next run for schedule %q: %w", scheduleID, err)
 		}
 		return nil

@@ -377,7 +377,42 @@ Decisions worth not re-litigating:
 - **A duplicate claim is not an error.** The bookkeeping still advances, to the
   values the winning caller computed, because leaving it behind would make the
   schedule re-offer a claimed due time on every tick forever.
+- **Schedule bookkeeping only ever moves forward** (review correction, below).
 - **`Tick` does not consult whether a previous run of the job is still active.**
   That is one of the pending product decisions, and deciding it in durable state
   before anyone chose would be worse than leaving the intent for a dispatcher to
   arbitrate.
+
+### Slice 3 review correction — stale claims could regress a schedule
+
+Coordinator review of `2d16653` found a concurrency gap, reproduced and fixed
+here. `ClaimScheduledRun` updated `last_nominal_run_at` and `next_run_at`
+unconditionally, so a claim computed for an earlier occurrence that committed
+after a later one dragged the schedule backwards: `next_run_at` ended up pointing
+at an occurrence already claimed, and `last_nominal_run_at` named the wrong run.
+
+The existing concurrency test did not cover this and could not have. It raced
+several callers for the *same* occurrence, which the unique key settles. Two
+callers holding *different* occurrences both insert legitimately, and the only
+question is whose bookkeeping survives — so the reproduction is ordered and
+deterministic rather than racy.
+
+Bookkeeping now moves forward only. A claim advances when its nominal is at or
+after the stored one; a schedule that has vanished still rolls the run back,
+while a schedule merely further ahead keeps the run and logs that it was left
+alone. `SetScheduleNextRun` gained the same rule, guarding reconciliation against
+undoing a claim it did not see.
+
+One subtlety worth keeping: the comparison is on the nominal identity, which is
+canonical fixed-width `YYYY-MM-DDTHH:MM` and therefore orders correctly as text.
+Stored instants are `RFC3339Nano` with a variable-width fractional part, where
+text order is *not* chronological (`…:00.5Z` sorts before `…:00Z`), so
+`SetScheduleNextRun` compares parsed `time.Time` values inside the write
+transaction instead of adding a `WHERE` clause that would look right and be
+wrong.
+
+Validation: focused sqlite and orchestrator tests, then `gofmt`, `go vet ./...`
+and `go test ./...` in WSL. The real-restic spikes were not repeated — no
+recovery code changed, and task 12's evidence stands. A Windows `go test ./...`
+run fails `internal/system`'s Linux path tests and is not a valid signal; WSL is
+the authoritative environment.
