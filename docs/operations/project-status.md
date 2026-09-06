@@ -19,7 +19,7 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 | M2 collection | Implemented; the live daemon collected the real SMB share three more times, including an `archive_then_sync` run that displaced a replaced and a removed file into a recorded revision batch. One reporting defect found and fixed (see below). |
 | M3 media | Implemented; prior loop-device evidence exists, and mount/sync/unmount ran cleanly through the daemon during the loop-image backup run. Physical removal acceptance remains separate. |
 | M4 backup | Implemented, acceptance OPEN. See the evidence matrix below for what is proven and on what media. Live loop-image work covers manual backup, the changed/deleted round trip, explicit verification and a graceful interruption. The process-crash sweep-and-adopt path is proven across a real process boundary but on fake media; lock refusal is fault-injected because it is not demonstrable live. Physical USB acceptance is separate and still deferred. |
-| M5 scheduler | Not started. The M4 readiness review recommends development may begin; awaiting coordinator decision. Note the milestone gate is M4 *software* readiness, not M4 acceptance, which needs hardware. |
+| M5 scheduler | Design only, no code. `docs/operations/m5-plan.md` holds the reviewed implementation plan, its slices and its first task; awaiting coordinator review. The gate that was cleared is M4 *software* readiness, not M4 acceptance. |
 | M6 rotation | Planned. |
 | M7 reporting | Planned. |
 | M8 retention | Planned. |
@@ -136,10 +136,13 @@ why, not as outstanding work. The only open item is 11.
     across all 5 snapshots with no errors. Recommendation: M4 software is
     sufficient to begin M5 development; M4 must not be recorded as accepted, and
     production use stays blocked on open question 7 (escrow).
-11. **Open — awaiting coordinator decision.** If the readiness recommendation is
-    accepted, begin M5 with a written design, not code. Otherwise, reconcile the
-    live WSL runtime with the approved installation layout. Either way, do not
-    treat local/fake-media tests as USB acceptance.
+11. Wrote and self-reviewed the M5 implementation plan
+    (`docs/operations/m5-plan.md`). Design only; no M5 code exists. The review
+    corrected three errors in the first draft and surfaced one latent hazard in
+    existing code (below).
+12. **Open — awaiting coordinator review of the M5 plan.** If accepted, the first
+    task is slice 1: migration `005` plus the domain enum widening, nothing else.
+    Do not treat local/fake-media tests as USB acceptance.
 
 ## Follow-through evidence and actual blocker
 
@@ -263,16 +266,21 @@ draft, not an approved plan. No M5 implementation started. Resume task08 to fini
 the plan and review its proposed product decisions before implementation; do not
 treat its disk-selection or timeout proposals as accepted architecture.
 
-All operator tasks through the M4 readiness review are finished. Nothing in the
-queue above is waiting to be executed except item 11, which needs a coordinator
-decision rather than work.
+All operator tasks through the M5 plan are finished. Nothing in the queue above
+is waiting to be executed except item 12, which needs a coordinator review rather
+than work.
 
-The current position: **M4 software is complete and reviewed; M4 is not
-accepted.** The recommendation, its evidence mapping and its two conditions are
-in `docs/operations/m4-readiness.md`. The next task is either an M5 design
-document or installation-layout reconciliation, depending on that decision. No
-M5 implementation has been started and none should be until the coordinator
-responds.
+The current position: **M4 software is complete and reviewed but not accepted;
+the M5 plan is written but not started.** No M5 code exists and none should be
+written until the plan is reviewed. The first task, if it is accepted, is slice 1
+of `docs/operations/m5-plan.md` and nothing beyond it.
+
+One finding from the M5 review applies to code that exists **today**, so it
+should not wait for M5: `ActiveRepositoryRuns` (`sqlite/backups.go:514`) and
+`ActiveRuns` (`sqlite/runs.go:180`) hardcode `status IN ('PENDING','RUNNING')`.
+That is correct for M4, whose runs only ever occupy those two active states, so
+nothing is broken now. It becomes a false-success hazard the moment the state
+machine widens, and it would not fail any existing test. See §3.7 of the plan.
 
 Two negative results the next operator should not spend time rediscovering:
 
