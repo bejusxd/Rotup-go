@@ -269,6 +269,18 @@ func TestInvalidSpecsAreRejected(t *testing.T) {
 		{"padded", withTime(valid, " 02:30"), "schedule_time_invalid"},
 		{"empty time", withTime(valid, ""), "schedule_time_invalid"},
 		{"not a time", withTime(valid, "ab:cd"), "schedule_time_invalid"},
+
+		// Signed forms. strconv.Atoi accepts a leading sign, so parsing the
+		// two-character fields with it let these through as ordinary times.
+		{"signed hour", withTime(valid, "+1:30"), "schedule_time_invalid"},
+		{"signed minute", withTime(valid, "01:+2"), "schedule_time_invalid"},
+		{"negative hour", withTime(valid, "-0:00"), "schedule_time_invalid"},
+		{"negative minute", withTime(valid, "01:-0"), "schedule_time_invalid"},
+		{"space in hour", withTime(valid, " 1:30"), "schedule_time_invalid"},
+		{"space in minute", withTime(valid, "01: 3"), "schedule_time_invalid"},
+		{"underscore", withTime(valid, "0_1:30"), "schedule_time_invalid"},
+		// strconv.Atoi rejects these, but a hand-rolled parser might not.
+		{"non-ascii digits", withTime(valid, "٠١:٣٠"), "schedule_time_invalid"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -290,6 +302,38 @@ func TestInvalidSpecsAreRejected(t *testing.T) {
 func withTime(s Spec, localTime string) Spec {
 	s.LocalTime = localTime
 	return s
+}
+
+// A signed local time is not a cosmetic validation gap. The configured text is
+// copied verbatim into the nominal due identity and from there into the
+// idempotency key, so "+1:30" and "01:30" would be two keys for one due time and
+// the deduplication that key exists to provide would stop working.
+func TestSignedLocalTimesCannotReachAnIdempotencyKey(t *testing.T) {
+	t.Parallel()
+	mustLoad(t, warsaw)
+
+	signed := Spec{Days: AllWeek, LocalTime: "+1:30", Timezone: warsaw, Enabled: true}
+	plain := Spec{Days: AllWeek, LocalTime: "01:30", Timezone: warsaw, Enabled: true}
+
+	if err := signed.Validate(); err == nil {
+		t.Fatal("a signed local time was accepted by Validate")
+	}
+	if _, _, err := signed.NextAfter(time.Now()); err == nil {
+		t.Fatal("a signed local time produced an occurrence")
+	}
+
+	// The plain spelling still works, so the fix rejects the sign rather than
+	// the hour it was hiding.
+	occurrence := next(t, plain, at(t, warsaw, "2006-01-02 15:04", "2026-06-10 00:00"))
+	if got := occurrence.At.Format("15:04"); got != "01:30" {
+		t.Fatalf("the valid spelling stopped working: %s", got)
+	}
+
+	// And the identity that would have carried the sign is refused outright.
+	if _, err := RunKey("job-1", Nominal{Date: "2026-06-10", Time: "+1:30"},
+		domain.RunTriggerScheduled); err == nil {
+		t.Fatal("a signed nominal time produced an idempotency key")
+	}
 }
 
 // Midnight and the last minute of the day are the boundaries a day-stepping

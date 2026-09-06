@@ -308,15 +308,31 @@ Check for active writers before dispatch. Finish the first unresolved queue item
 review its diff and tests, commit a coherent checkpoint, then update this file.
 Do not start future milestones or infer acceptance from a green unit test suite.
 
-### Coordinator checkpoint — 2026-09-06 10:03 Europe/Warsaw
+### Historical — coordinator checkpoint, 2026-09-06 10:03 Europe/Warsaw
 
-Task09 (`af7b8bc`, M5 slice 1) was reviewed by the coordinator; independent
-SQLite/domain tests passed. Task10 (slice 2, pure schedule arithmetic) stopped
-at the Claude subscription limit before producing tracked changes. The working
-tree is clean; slice 2 is not implemented. Prompt and result are retained in
+Recorded when task10 (slice 2) stopped at the Claude subscription limit before
+producing tracked changes, with reset reported for 14:00 Europe/Warsaw. **That
+pause is over and slice 2 is implemented** (`7645085`), so this note is history
+and is not an instruction to wait or resume. Prompt and result remain in
 `.cache/operator/claude-task-10.txt` and `.jsonl`.
 
-Claude reports reset 2026-09-06 14:00 Europe/Warsaw (1788696000). Resume task10
-at 14:01, without polling or switching executors during the wait and without
-paid overage. After a successful resume restore 15-minute coordination. The two
-product decisions listed above remain pending; they do not block this slice.
+### Slice 2 review correction — 2026-09-06
+
+Coordinator review of `7645085` found a real validation defect, fixed here.
+`parseLocalTime` used `strconv.Atoi` on the two-character hour and minute
+fields, and `Atoi` accepts a leading sign, so `+1:30`, `01:+2` and `-0:00` were
+accepted despite the exact HH:MM contract.
+
+This was not cosmetic. The configured text is copied verbatim into the nominal
+due identity and from there into the idempotency key, so `-0:00` and `00:00`
+would have produced two distinct keys for one due time — and that key is the
+only thing preventing a duplicate run. The mutation check makes it concrete: with
+the old parser restored, the regression fails with a genuinely produced key
+`rotup/v1|job=job-1|due=2026-06-10T-0%3A00|trigger=SCHEDULED`.
+
+Both entry points are now strict. `parseLocalTime` reads ASCII digits one byte at
+a time, and `Nominal.Validate` rejects any non-canonical due identity before it
+can reach a key — refusing rather than normalising, since normalising would hide
+the caller's bug behind a key that no longer matches what was stored.
+
+The two product decisions listed above remain pending; they do not block slice 3.

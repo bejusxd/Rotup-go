@@ -372,6 +372,15 @@ fixing an order.
 unevaluatable. The standard library uses it only as a fallback, so an up-to-date
 system database still wins.
 
+**Review correction.** The first version of `parseLocalTime` used
+`strconv.Atoi` on the two-character fields. `Atoi` accepts a leading sign, so
+`+1:30`, `01:+2` and `-0:00` passed validation. Because the configured text is
+copied verbatim into the nominal identity and from there into the key, that
+would have produced two distinct keys for one due time and defeated the
+deduplication the key exists for. Both entry points are now strict:
+`parseLocalTime` checks ASCII digits directly, and `Nominal.Validate` refuses a
+non-canonical identity before it can reach `RunKey` rather than normalising it.
+
 Next: **slice 3**, durable intent creation and startup reconciliation. This is
 the slice that first writes a new status, so it owns the §3.7 widening in the
 same commit.

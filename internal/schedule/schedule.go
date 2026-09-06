@@ -11,7 +11,6 @@ package schedule
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -81,6 +80,35 @@ type Nominal struct {
 // String returns the canonical form used in idempotency keys and history.
 func (n Nominal) String() string { return n.Date + "T" + n.Time }
 
+// Validate proves a nominal due identity is in its canonical form.
+//
+// NextAfter only ever builds these itself, so in the normal path this can never
+// fail. It exists because the identity is exported and reaches the idempotency
+// key, where a non-canonical spelling would be a correctness problem rather than
+// a cosmetic one: two spellings of one due time produce two keys, and two keys
+// mean the duplicate the key exists to prevent gets written.
+func (n Nominal) Validate() error {
+	invalid := func(detail string) error {
+		return domain.NewError(domain.ErrClassInvariant, "nominal_due_invalid",
+			fmt.Sprintf("%q is not a canonical nominal due time: %s", n, detail))
+	}
+	if len(n.Date) != 10 || n.Date[4] != '-' || n.Date[7] != '-' ||
+		!asciiDigits(n.Date[0:4]) || !asciiDigits(n.Date[5:7]) || !asciiDigits(n.Date[8:10]) {
+		return invalid("the date must be YYYY-MM-DD")
+	}
+	// The shape is right; confirm it is a date that exists. ParseInLocation is
+	// only reached once the characters are already known to be digits, so it
+	// cannot be the thing that accepts a loose spelling.
+	parsed, err := time.Parse("2006-01-02", n.Date)
+	if err != nil || parsed.Format("2006-01-02") != n.Date {
+		return invalid("the date is not a real calendar date")
+	}
+	if _, _, err := parseLocalTime(n.Time); err != nil {
+		return invalid("the time must be 24-hour HH:MM")
+	}
+	return nil
+}
+
 // Occurrence is one resolved firing: the instant it happens, and the nominal
 // local time it stands for.
 type Occurrence struct {
@@ -132,8 +160,16 @@ func (s Spec) resolve() (*time.Location, int, int, error) {
 }
 
 // parseLocalTime accepts exactly "HH:MM" in 24-hour form. Anything looser — a
-// missing leading zero, a seconds field, surrounding space — is rejected rather
-// than normalised, because the stored value is compared as text elsewhere.
+// missing leading zero, a seconds field, surrounding space, a sign — is rejected
+// rather than normalised, because the stored value is compared as text
+// elsewhere and is copied verbatim into the nominal due identity.
+//
+// The digits are checked one byte at a time on purpose. strconv.Atoi accepts a
+// leading sign, so parsing the two-character fields with it would let "+1:30"
+// and "-0:00" through as 01:30 and 00:00. That is not merely a lax validator:
+// two spellings of one due time would reach the idempotency key as two distinct
+// values, and the deduplication that key exists to provide would silently stop
+// working for that schedule.
 func parseLocalTime(value string) (int, int, error) {
 	invalid := func() error {
 		return domain.NewError(domain.ErrClassConfiguration, "schedule_time_invalid",
@@ -142,15 +178,40 @@ func parseLocalTime(value string) (int, int, error) {
 	if len(value) != 5 || value[2] != ':' {
 		return 0, 0, invalid()
 	}
-	hour, err := strconv.Atoi(value[0:2])
-	if err != nil || hour < 0 || hour > 23 {
+	hour, ok := twoDigitValue(value[0:2])
+	if !ok || hour > 23 {
 		return 0, 0, invalid()
 	}
-	minute, err := strconv.Atoi(value[3:5])
-	if err != nil || minute < 0 || minute > 59 {
+	minute, ok := twoDigitValue(value[3:5])
+	if !ok || minute > 59 {
 		return 0, 0, invalid()
 	}
 	return hour, minute, nil
+}
+
+// twoDigitValue reads exactly two ASCII digits. It reports failure rather than
+// interpreting anything else, including a sign, a space or a Unicode digit.
+func twoDigitValue(value string) (int, bool) {
+	if len(value) != 2 {
+		return 0, false
+	}
+	if !asciiDigits(value) {
+		return 0, false
+	}
+	return int(value[0]-'0')*10 + int(value[1]-'0'), true
+}
+
+// asciiDigits reports whether every byte is '0' to '9'.
+func asciiDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // NextAfter returns the first occurrence strictly after the given instant.

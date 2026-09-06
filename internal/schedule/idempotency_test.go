@@ -109,6 +109,70 @@ func TestRunKeyRefusesIncompleteInput(t *testing.T) {
 	}
 }
 
+// The nominal identity reaching the key must already be canonical. Encoding a
+// loose spelling would be worse than rejecting it: the key would be well-formed
+// and unique, and would therefore permit exactly the duplicate run it exists to
+// prevent.
+func TestRunKeyRefusesNonCanonicalNominalTimes(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		nominal Nominal
+	}{
+		{"signed hour", Nominal{Date: "2026-06-10", Time: "+1:30"}},
+		{"signed minute", Nominal{Date: "2026-06-10", Time: "01:+2"}},
+		{"negative hour", Nominal{Date: "2026-06-10", Time: "-0:00"}},
+		{"unpadded hour", Nominal{Date: "2026-06-10", Time: "1:30"}},
+		{"seconds", Nominal{Date: "2026-06-10", Time: "01:30:00"}},
+		{"hour out of range", Nominal{Date: "2026-06-10", Time: "24:00"}},
+		{"signed year", Nominal{Date: "+026-06-10", Time: "01:30"}},
+		{"unpadded month", Nominal{Date: "2026-6-10", Time: "01:30"}},
+		{"slashes", Nominal{Date: "2026/06/10", Time: "01:30"}},
+		{"impossible month", Nominal{Date: "2026-13-10", Time: "01:30"}},
+		{"impossible day", Nominal{Date: "2026-02-30", Time: "01:30"}},
+		{"time in the date", Nominal{Date: "2026-06-10T01:30", Time: "01:30"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			key, err := RunKey("job-1", c.nominal, domain.RunTriggerScheduled)
+			if err == nil {
+				t.Fatalf("a non-canonical nominal produced key %s", key)
+			}
+			var typed *domain.Error
+			if !domain.AsError(err, &typed) || typed.Code != "nominal_due_invalid" {
+				t.Fatalf("error = %v, want code nominal_due_invalid", err)
+			}
+		})
+	}
+
+	// The canonical form still works.
+	if _, err := RunKey("job-1", Nominal{Date: "2026-06-10", Time: "01:30"},
+		domain.RunTriggerScheduled); err != nil {
+		t.Fatalf("a canonical nominal was rejected: %v", err)
+	}
+}
+
+// Whatever NextAfter produces must always be acceptable to RunKey, including on
+// the daylight-saving days where the two disagree about the instant.
+func TestEveryOccurrenceProducesAKey(t *testing.T) {
+	t.Parallel()
+	mustLoad(t, warsaw)
+
+	s := Spec{Days: AllWeek, LocalTime: "02:30", Timezone: warsaw, Enabled: true}
+	cursor := at(t, warsaw, "2006-01-02 15:04", "2026-03-27 12:00")
+	for day := 0; day < 5; day++ {
+		occurrence := next(t, s, cursor)
+		if err := occurrence.Nominal.Validate(); err != nil {
+			t.Fatalf("NextAfter produced a non-canonical nominal %q: %v", occurrence.Nominal, err)
+		}
+		if _, err := RunKey("job-1", occurrence.Nominal, domain.RunTriggerScheduled); err != nil {
+			t.Fatalf("occurrence at %s could not be keyed: %v", occurrence.At, err)
+		}
+		cursor = occurrence.At
+	}
+}
+
 // The key is derived from job, nominal time and trigger — not from the schedule.
 // Two schedules on one job that land on the same minute therefore deduplicate to
 // a single run, which is the specified behaviour and is asserted here so that a

@@ -39,6 +39,14 @@ func RunKey(jobID string, nominal Nominal, trigger domain.RunTrigger) (string, e
 		return "", domain.NewError(domain.ErrClassInvariant, "idempotency_due_missing",
 			"an idempotency key needs a complete nominal due time")
 	}
+	// A non-canonical spelling would encode cleanly and produce a second key for
+	// a due time that already has one, which is precisely the duplicate this key
+	// exists to prevent. Refusing is the only safe answer; normalising here
+	// would hide the caller's bug behind a key that no longer matches what it
+	// stored.
+	if err := nominal.Validate(); err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(string(trigger)) == "" {
 		return "", domain.NewError(domain.ErrClassInvariant, "idempotency_trigger_missing",
 			"an idempotency key needs the trigger kind")
