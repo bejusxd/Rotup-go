@@ -416,3 +416,19 @@ and `go test ./...` in WSL. The real-restic spikes were not repeated — no
 recovery code changed, and task 12's evidence stands. A Windows `go test ./...`
 run fails `internal/system`'s Linux path tests and is not a valid signal; WSL is
 the authoritative environment.
+
+### Coordinator pause — 2026-09-07 01:53 Europe/Warsaw
+
+Work is paused. User requested a hard stop by 05:00 today; Claude task14
+hit its subscription limit, with reset at 06:00, after that deadline.
+No automatic resume is scheduled and no executor switch or paid overage is used.
+HEAD implementation is 5953025; working tree was clean at this checkpoint.
+Slice 3 is implemented but NOT yet accepted by the coordinator.
+
+Resume only on renewed user instruction. First finish task14's bounded review:
+check whether delayed distinct-occurrence claims can violate one catch-up and
+whether scheduled BACKUP_LATEST intents without backup_runs metadata are safely
+swept on startup. Review 5953025 and run proportional independent tests before
+accepting slice 3; do not start slice 4 prematurely. Task14 produced no tracked
+changes. Retained prompt/result: .cache/operator/claude-task-14.txt and .jsonl.
+Disk-preference and overlapping-tick product decisions remain pending.
