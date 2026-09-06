@@ -512,14 +512,18 @@ func (s *Store) RevisionCoverageForBatch(ctx context.Context, batchID string) ([
 // ActiveRepositoryRuns returns every repository-touching run a previous process
 // left non-terminal.
 func (s *Store) ActiveRepositoryRuns(ctx context.Context) ([]domain.Run, error) {
+	// The status set comes from the domain's classification for the same reason
+	// ActiveRuns does: a status this clause forgets is a repository operation
+	// that a crash leaves unswept and unsuspected.
+	placeholders, args := activeStatusFilter()
+	args = append(args,
+		string(domain.RunKindBackupLatest), string(domain.RunKindDiskSetup),
+		string(domain.RunKindVerify), string(domain.RunKindRetention))
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+runColumns+`
 		FROM runs
-		WHERE status IN (?, ?) AND kind IN (?, ?, ?)
-		ORDER BY requested_at`,
-		string(domain.RunStatusPending), string(domain.RunStatusRunning),
-		string(domain.RunKindBackupLatest), string(domain.RunKindDiskSetup),
-		string(domain.RunKindVerify))
+		WHERE status IN (`+placeholders+`) AND kind IN (?, ?, ?, ?)
+		ORDER BY requested_at`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list active repository runs: %w", err)
 	}

@@ -235,7 +235,7 @@ Each slice is one commit, independently reviewable, and leaves the tree green.
 |---|---|---|
 | ~~1~~ | ~~Migration `005` + domain enums.~~ **Done** — see §9. | — |
 | ~~2~~ | ~~`internal/schedule`: pure next-run arithmetic + idempotency key.~~ **Done** — see §9. | — |
-| 3 | Durable intent creation and startup reconciliation: `domain.ActiveRunStatuses()` driving both active-run queries (§3.7), create runs idempotently from due schedules, sweep all active statuses, recompute due times, at-most-one catch-up. **This is the first slice that writes a new status, so the sweep widening lands here.** | Fake clock; duplicate firing rejected; a daemon down for a week enqueues one run, not seven; a crash in each new non-terminal status is swept; the M4 crash spike still passes unchanged |
+| ~~3~~ | ~~Durable intent creation and startup reconciliation.~~ **Done** — see §9. | — |
 | 4 | `internal/coordinator`: named locks over the existing barrier, source locks and disk leases, in sorted order. | Two collections overlap; backup excludes collection; acquisition order is stable; no deadlock under concurrent demand; release on every path |
 | 5 | Scheduler loop, worker pools, `WAITING_FOR_RESOURCE`, coalescing, retry and timeout. | Coalescing marks the older run `SUPERSEDED` and keeps it auditable; a manual run is never coalesced; missing media waits without consuming `attempt_count`; retry deadline exhaustion; timeout produces `TIMED_OUT` with no adopted snapshot |
 | 6 | Backup-after-collection chaining (`parent_run_id`, `COLLECTION_SUCCESS`) and the jobs/schedules UI + API. | Chain fires on success and, per the flag, on partial; never on failure; manual endpoints byte-identical in behaviour; page renders without a job configured |
@@ -381,9 +381,67 @@ deduplication the key exists for. Both entry points are now strict:
 `parseLocalTime` checks ASCII digits directly, and `Nominal.Validate` refuses a
 non-canonical identity before it can reach `RunKey` rather than normalising it.
 
-Next: **slice 3**, durable intent creation and startup reconciliation. This is
-the slice that first writes a new status, so it owns the §3.7 widening in the
-same commit.
+### Slice 3 — done
+
+`internal/orchestrator` holds the planning half: `Reconcile` recomputes cached
+due times, `Tick` creates durable intents. Neither starts anything.
+
+**The §3.7 widening landed here.** `domain.ActiveRunStatuses()` is derived from
+`Terminal()`, and both `ActiveRuns` and `ActiveRepositoryRuns` now build their
+`IN` clause from it instead of naming PENDING and RUNNING. `ActiveRepositoryRuns`
+also picked up `RETENTION`, matching `TouchesRepository`. A test seeds a run in
+*every* active status and asserts both queries return it, so a future status
+cannot be added and forgotten.
+
+Worth being precise about: this slice writes only `PENDING`, the initial state of
+the architecture's run machine. The widening is therefore precautionary rather
+than load-bearing today. The behavioural half is proven directly instead — tests
+put a crashed backup into each active status and assert the sweep reaches
+`INTERRUPTED`, marks the repository `SUSPECT` when restic had started, and does
+**not** when it had not, so a run that was only ever waiting for a disk cannot
+cast doubt on the media. The collection sweep is covered the same way, including
+that it still leaves repository kinds to the recovery that owns them.
+
+`ClaimScheduledRun` writes the run and advances the schedule in one transaction.
+A duplicate key is not an error: the bookkeeping still advances, to exactly the
+values the winning caller computed, because leaving it behind would make the
+schedule re-offer a due time that has already been claimed on every tick
+forever. If the bookkeeping cannot advance, the run is rolled back — the reverse
+order is the dangerous one, since a schedule advanced past a run that was never
+created is work that silently never happens. Eight concurrent callers produce one
+run and exactly one winner.
+
+Catch-up takes the **most recent** missed occurrence, not the oldest. The nominal
+due time is recorded on the run and shown in history, and a run labelled with a
+due time from a week ago would misdescribe itself: it collects or backs up
+whatever is current when it executes. `Reconcile` deliberately leaves an already
+overdue schedule alone rather than recomputing it forward, which would silently
+discard the run that was owed.
+
+Deferred on purpose, and not decided here:
+
+- **Overlapping ticks.** `Tick` does not consult whether a previous run of the
+  job is still active. That is an unanswered product question, and answering it
+  in durable state before anyone chose would be worse than leaving the intent for
+  a dispatcher to arbitrate.
+- **Disk preference and coalescing.** Neither is reachable from planning; both
+  wait for the dispatcher.
+- `runs.nominal_due_at` is written but not yet surfaced on `domain.Run`, so this
+  slice does not touch every read path. The schedule's `last_nominal_run_at`
+  carries the same identity meanwhile; the slice that builds the history and UI
+  should expose it.
+
+One gap found while writing this, recorded so the slice that hits it does not
+have to rediscover it. `Reconcile` deliberately leaves a schedule whose cached
+`next_run_at` is already past, because that is how an owed run survives downtime.
+If a schedule's weekdays or local time were edited after that value was cached,
+the cached instant could be in the past while no occurrence is actually due, and
+neither pass would correct it. Nothing can reach that state today — slice 3 adds
+no way to edit a schedule — but **the slice that adds editing must recompute
+`next_run_at` as part of the edit**, not rely on reconciliation to notice.
+
+Next: **slice 4**, the resource coordinator — named locks over the existing
+barrier, source locks and disk leases, acquired in the globally sorted order.
 
 ## 8. Review note
 

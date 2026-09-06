@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bejusxd/rotup/internal/domain"
@@ -14,6 +15,25 @@ import (
 const runColumns = `id, kind, trigger_kind, source_id, status, summary, summary_json,
 	last_error_class, last_error_code, last_safe_error,
 	requested_at, started_at, finished_at, updated_at`
+
+// activeStatusFilter builds the IN clause for "this run has not finished" from
+// the domain's own classification rather than from a list written out here.
+//
+// The literal version of this clause named PENDING and RUNNING, which was
+// correct while those were the only active statuses. Widening the state machine
+// without widening the clause would have been silent: a run left QUEUED or
+// RETRY_DELAY by a crash would never be swept, and its repository would never be
+// marked suspect. Deriving it means adding a status cannot reintroduce that.
+func activeStatusFilter() (string, []any) {
+	statuses := domain.ActiveRunStatuses()
+	placeholders := make([]string, 0, len(statuses))
+	args := make([]any, 0, len(statuses))
+	for _, status := range statuses {
+		placeholders = append(placeholders, "?")
+		args = append(args, string(status))
+	}
+	return strings.Join(placeholders, ", "), args
+}
 
 // RecordRun stores one complete run in a single statement. It is used for runs
 // that are already terminal when they are written, such as the M1 demo run.
@@ -178,12 +198,12 @@ func (s *Store) LatestCollectionForSource(ctx context.Context, sourceID string) 
 
 // ActiveRuns returns every run that a previous process left non-terminal.
 func (s *Store) ActiveRuns(ctx context.Context) ([]domain.Run, error) {
+	placeholders, args := activeStatusFilter()
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+runColumns+`
 		FROM runs
-		WHERE status IN (?, ?)
-		ORDER BY requested_at`,
-		string(domain.RunStatusPending), string(domain.RunStatusRunning))
+		WHERE status IN (`+placeholders+`)
+		ORDER BY requested_at`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list active runs: %w", err)
 	}

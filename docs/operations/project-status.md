@@ -19,7 +19,7 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 | M2 collection | Implemented; the live daemon collected the real SMB share three more times, including an `archive_then_sync` run that displaced a replaced and a removed file into a recorded revision batch. One reporting defect found and fixed (see below). |
 | M3 media | Implemented; prior loop-device evidence exists, and mount/sync/unmount ran cleanly through the daemon during the loop-image backup run. Physical removal acceptance remains separate. |
 | M4 backup | Implemented, acceptance OPEN. See the evidence matrix below for what is proven and on what media. Live loop-image work covers manual backup, the changed/deleted round trip, explicit verification and a graceful interruption. The process-crash sweep-and-adopt path is proven across a real process boundary but on fake media; lock refusal is fault-injected because it is not demonstrable live. Physical USB acceptance is separate and still deferred. |
-| M5 scheduler | Slices 1-2 of 6 implemented: migration `005` with the run status/trigger enums, and `internal/schedule` (pure occurrence arithmetic and idempotency keys). No scheduler loop, dispatcher, automatic run or UI yet. Automation is inert: with no `jobs` and no `schedules` rows nothing evaluates. Plan and remaining slices in `docs/operations/m5-plan.md`. |
+| M5 scheduler | Slices 1-3 of 6 implemented: migration `005` with the run status/trigger enums, `internal/schedule` (occurrence arithmetic and idempotency keys), and `internal/orchestrator` (durable intent creation and startup reconciliation). No dispatcher, worker pool, resource coordinator or UI yet — nothing executes a run. Automation is inert: with no `jobs` and no `schedules` rows nothing evaluates. Plan and remaining slices in `docs/operations/m5-plan.md`. |
 | M6 rotation | Planned. |
 | M7 reporting | Planned. |
 | M8 retention | Planned. |
@@ -148,10 +148,15 @@ why, not as outstanding work. The only open item is 11.
 13. Implemented M5 slice 2: `internal/schedule`, pure occurrence arithmetic and
     idempotency key derivation. Both daylight-saving edges, non-hour shifts,
     week wrap, boundary and validation cases are tested. No I/O, no loop.
-14. **Open — next is M5 slice 3**, durable intent creation and startup
-    reconciliation. It is the first slice that writes a new run status, so it
-    must widen `ActiveRepositoryRuns`/`ActiveRuns` in the same commit (§3.7 of
-    the plan). Do not treat local/fake-media tests as USB acceptance.
+14. Implemented M5 slice 3: `internal/orchestrator` (durable intent creation and
+    startup reconciliation), the `jobs`/`schedules` store, and the §3.7 widening
+    of both active-run queries from `domain.ActiveRunStatuses()`. Intent creation
+    and schedule bookkeeping commit together; a duplicate claim is not an error
+    and still advances the schedule; a failed advance rolls the run back. Nothing
+    executes a run yet.
+15. **Open — next is M5 slice 4**, the resource coordinator: named locks over the
+    existing staging barrier, per-source locks and disk leases, acquired in the
+    globally sorted order. Do not treat local/fake-media tests as USB acceptance.
 
 ## Follow-through evidence and actual blocker
 
@@ -269,11 +274,16 @@ why, not as outstanding work. The only open item is 11.
 ## Continuation
 
 The current position: **M4 software is complete and reviewed but not accepted;
-M5 has begun, two slices of six.** The plan in `docs/operations/m5-plan.md` is
-reviewed and accepted. The next task is slice 3 and nothing beyond it.
+M5 has begun, three slices of six.** The plan in `docs/operations/m5-plan.md` is
+reviewed and accepted. The next task is slice 4 and nothing beyond it.
+
+Nothing in M5 executes a run yet. Slices 1 to 3 build the durable side only:
+schema, occurrence arithmetic, and the planner that records that work is due. The
+dispatcher, the worker pools and the resource coordinator are still to come, so a
+configured schedule currently produces a `PENDING` row and nothing else.
 
 Two product decisions are **pending user input** and must not be implemented as
-though they were settled. Neither blocks slices 3 to 4:
+though they were settled. Neither blocks slice 4:
 
 - Which disk a scheduled `BACKUP_LATEST` should prefer when several authorized
   disks are connected (ARCHITECTURE open question 3). §14 already settles that
@@ -282,11 +292,19 @@ though they were settled. Neither blocks slices 3 to 4:
 - Whether a schedule may fire while an earlier run of the same job is still
   running, or should be skipped with a recorded reason.
 
-The standing hazard for slice 3: `ActiveRepositoryRuns` (`sqlite/backups.go:514`)
-and `ActiveRuns` (`sqlite/runs.go:180`) still list `status IN ('PENDING',
-'RUNNING')` literally. That is still correct, because slices 1 and 2 write no new
-status. It becomes a false-success hazard in the same commit that first writes
-one, and no existing test would catch it. See §3.7 of the plan.
+**The §3.7 hazard is closed.** `ActiveRepositoryRuns` and `ActiveRuns` no longer
+spell out `PENDING` and `RUNNING`; both build their `IN` clause from
+`domain.ActiveRunStatuses()`, which is derived from `Terminal()`. A test seeds a
+run in every active status and asserts both queries return it, so a status added
+later cannot be forgotten in a `WHERE` clause. The unchanged M4 crash spike was
+re-run over the rewritten queries, because that evidence rested on them.
+
+Slice 3 itself writes only `PENDING`, so the widening was precautionary rather
+than load-bearing on the day it landed. The behaviour was proven directly
+instead: a crashed backup seeded into each active status is swept to
+`INTERRUPTED`, marks the repository `SUSPECT` when restic had started, and leaves
+it `HEALTHY` when it had not — so a run that was only ever waiting for a disk
+casts no doubt on the media.
 
 One thing slice 2 settled that is worth not re-deciding: the idempotency key is
 derived from job, nominal due time and trigger kind, exactly as §13 says, and so
@@ -335,4 +353,31 @@ a time, and `Nominal.Validate` rejects any non-canonical due identity before it
 can reach a key — refusing rather than normalising, since normalising would hide
 the caller's bug behind a key that no longer matches what was stored.
 
-The two product decisions listed above remain pending; they do not block slice 3.
+The two product decisions listed above remain pending; they did not block slice 3.
+
+### Slice 3 — 2026-09-06/07
+
+Implementation and validation spanned a subscription limit (reset 2026-09-07
+01:00 Europe/Warsaw). The pause is over; the work was preserved rather than
+redone, and the validation below was re-run on resume rather than carried over on
+the strength of the earlier session's text report.
+
+What landed: `internal/orchestrator` (the planner: `Reconcile` and `Tick`), the
+`jobs`/`schedules`/`ScheduledIntent` store surface, `domain.Job`/`domain.Schedule`,
+`domain.ActiveRunStatuses()`, and the §3.7 widening of both active-run queries.
+
+Decisions worth not re-litigating:
+
+- **Catch-up takes the most recent missed occurrence, not the oldest.** The
+  nominal due time is shown in history, and a run labelled with a week-old due
+  time would misdescribe itself: it collects or backs up whatever is current when
+  it executes.
+- **`Reconcile` leaves an already overdue schedule alone** rather than recomputing
+  it forward, which would silently discard the run that was owed.
+- **A duplicate claim is not an error.** The bookkeeping still advances, to the
+  values the winning caller computed, because leaving it behind would make the
+  schedule re-offer a claimed due time on every tick forever.
+- **`Tick` does not consult whether a previous run of the job is still active.**
+  That is one of the pending product decisions, and deciding it in durable state
+  before anyone chose would be worse than leaving the intent for a dispatcher to
+  arbitrate.

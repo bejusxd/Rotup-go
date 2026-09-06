@@ -145,6 +145,37 @@ func (s RunStatus) Successful() bool {
 	return s == RunStatusSucceeded || s == RunStatusSucceededWithWarning
 }
 
+// allRunStatuses is every status the schema permits.
+var allRunStatuses = []RunStatus{
+	RunStatusPending, RunStatusWaitingForResource, RunStatusQueued,
+	RunStatusPreflight, RunStatusRunning, RunStatusFinalizing,
+	RunStatusRetryDelay, RunStatusSucceeded, RunStatusSucceededWithWarning,
+	RunStatusPartial, RunStatusFailed, RunStatusTimedOut, RunStatusInterrupted,
+	RunStatusCanceled, RunStatusSkipped, RunStatusSuperseded,
+}
+
+// AllRunStatuses returns every status, for exhaustiveness checks.
+func AllRunStatuses() []RunStatus {
+	return append([]RunStatus(nil), allRunStatuses...)
+}
+
+// ActiveRunStatuses returns the statuses a run can hold while it is still
+// unfinished, derived from Terminal so the two can never disagree.
+//
+// Startup recovery selects on exactly this set. Deriving it here rather than
+// writing the values into each query is the whole point: a status that is added
+// to the state machine and forgotten in a WHERE clause is a run no sweep will
+// ever look at, and for a backup that means a repository nobody marks suspect.
+func ActiveRunStatuses() []RunStatus {
+	result := make([]RunStatus, 0, len(allRunStatuses))
+	for _, status := range allRunStatuses {
+		if !status.Terminal() {
+			result = append(result, status)
+		}
+	}
+	return result
+}
+
 // Run is one durable execution request plus its summarized outcome.
 type Run struct {
 	ID          string
