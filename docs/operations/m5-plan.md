@@ -233,7 +233,7 @@ Each slice is one commit, independently reviewable, and leaves the tree green.
 
 | # | Slice | Tests |
 |---|---|---|
-| **1** | **Migration `005` + domain enums.** `jobs`, `schedules`, `job_sources`; rebuild `runs` with the new columns and widened CHECKs. No behaviour. | Migration applies to a populated M4 database and preserves every existing row; CHECK constraints reject bad enum values; `idempotency_key` uniqueness; `Terminal()`/`Successful()` for every new status |
+| ~~1~~ | ~~Migration `005` + domain enums.~~ **Done** — see §9. | — |
 | 2 | `internal/schedule`: pure next-run arithmetic + idempotency key. No I/O. | Table tests for weekday masks, week wrap, disabled; **DST spring-forward and fall-back**; the doubled hour produces one key |
 | 3 | Durable intent creation and startup reconciliation: `domain.ActiveRunStatuses()` driving both active-run queries (§3.7), create runs idempotently from due schedules, sweep all active statuses, recompute due times, at-most-one catch-up. **This is the first slice that writes a new status, so the sweep widening lands here.** | Fake clock; duplicate firing rejected; a daemon down for a week enqueues one run, not seven; a crash in each new non-terminal status is swept; the M4 crash spike still passes unchanged |
 | 4 | `internal/coordinator`: named locks over the existing barrier, source locks and disk leases, in sorted order. | Two collections overlap; backup excludes collection; acquisition order is stable; no deadlock under concurrent demand; release on every path |
@@ -295,6 +295,42 @@ widened in slice 3 (§3.7).
   disk and records it against the actual disk. Per-disk repositories (AD-6) mean
   writing to any authorized disk is well-defined, not divergence. Corrected in
   decision 1.
+
+## 9. Progress
+
+**Slice 1 is implemented.** Migration `005_m5_scheduling.sql` adds `jobs`,
+`schedules` and `job_sources` and rebuilds `runs` with every §18 column, the full
+status and trigger CHECK sets, `idx_runs_dispatch` and `idx_runs_job_time`.
+`domain.RunStatus` and `RunTrigger` carry the new values.
+
+Two divergences from §18 were kept deliberately and are recorded in the
+migration header rather than made silently:
+
+- `runs.source_id` and `runs.summary` stay. §18 lists neither, but the running
+  implementation stores a collection run's source on the run and renders
+  `summary`, and `job_sources`/`run_source_results` do not replace either for the
+  job-less manual runs every existing database is full of. Retiring them belongs
+  to a later slice, once jobs actually own source selection.
+- `runs.kind` keeps `DEMO`. §18 omits it; migration 001 created those rows and
+  the daemon still records one at startup, so removing the value would make
+  existing databases unmigratable.
+
+Two forward-safety decisions were made while the enums were being added, both
+because the alternative was to leave a hazard for a later slice to discover:
+
+- `RunStatus.Terminal()` now enumerates the *active* statuses and reports an
+  unrecognised value as **active**. A status wrongly called finished is a run the
+  sweep never looks at; a status wrongly called active is merely swept to
+  `INTERRUPTED`. Only one of those is silent.
+- `RunKindRetention.TouchesRepository()` returns true, before M8 produces such a
+  run, so that milestone cannot begin writing repository-mutating runs while the
+  sweep ignores them.
+
+Still true, and unchanged by this slice: `ActiveRepositoryRuns` and `ActiveRuns`
+still list `PENDING` and `RUNNING` literally. That remains correct because this
+slice writes no new status. Slice 3 owns the widening (§3.7).
+
+Next: **slice 2**, the pure schedule arithmetic. It needs no product decisions.
 
 ## 8. Review note
 

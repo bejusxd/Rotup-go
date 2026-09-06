@@ -19,7 +19,7 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 | M2 collection | Implemented; the live daemon collected the real SMB share three more times, including an `archive_then_sync` run that displaced a replaced and a removed file into a recorded revision batch. One reporting defect found and fixed (see below). |
 | M3 media | Implemented; prior loop-device evidence exists, and mount/sync/unmount ran cleanly through the daemon during the loop-image backup run. Physical removal acceptance remains separate. |
 | M4 backup | Implemented, acceptance OPEN. See the evidence matrix below for what is proven and on what media. Live loop-image work covers manual backup, the changed/deleted round trip, explicit verification and a graceful interruption. The process-crash sweep-and-adopt path is proven across a real process boundary but on fake media; lock refusal is fault-injected because it is not demonstrable live. Physical USB acceptance is separate and still deferred. |
-| M5 scheduler | Design only, no code. `docs/operations/m5-plan.md` holds the reviewed implementation plan, its slices and its first task; awaiting coordinator review. The gate that was cleared is M4 *software* readiness, not M4 acceptance. |
+| M5 scheduler | Slice 1 of 6 implemented: migration `005` plus the run status/trigger enums. Schema only — no scheduler, no dispatcher, no automatic run, no UI. Automation is inert: with no `jobs` and no `schedules` rows nothing evaluates. Plan and remaining slices in `docs/operations/m5-plan.md`. |
 | M6 rotation | Planned. |
 | M7 reporting | Planned. |
 | M8 retention | Planned. |
@@ -140,9 +140,14 @@ why, not as outstanding work. The only open item is 11.
     (`docs/operations/m5-plan.md`). Design only; no M5 code exists. The review
     corrected three errors in the first draft and surfaced one latent hazard in
     existing code (below).
-12. **Open — awaiting coordinator review of the M5 plan.** If accepted, the first
-    task is slice 1: migration `005` plus the domain enum widening, nothing else.
-    Do not treat local/fake-media tests as USB acceptance.
+12. Implemented M5 slice 1: migration `005` (`jobs`, `schedules`, `job_sources`,
+    `runs` rebuilt with the full §18 columns, CHECKs and indexes) and the
+    `RunStatus`/`RunTrigger` enum widening. Schema only; nothing writes a new
+    status. Two §18 divergences kept deliberately and documented in the migration
+    header (`runs.source_id`/`summary` retained, `DEMO` kind retained).
+13. **Open — next is M5 slice 2**, the pure schedule arithmetic (weekday mask,
+    local time, timezone, DST rules, idempotency key). No product decision blocks
+    it. Do not treat local/fake-media tests as USB acceptance.
 
 ## Follow-through evidence and actual blocker
 
@@ -266,21 +271,25 @@ draft, not an approved plan. No M5 implementation started. Resume task08 to fini
 the plan and review its proposed product decisions before implementation; do not
 treat its disk-selection or timeout proposals as accepted architecture.
 
-All operator tasks through the M5 plan are finished. Nothing in the queue above
-is waiting to be executed except item 12, which needs a coordinator review rather
-than work.
-
 The current position: **M4 software is complete and reviewed but not accepted;
-the M5 plan is written but not started.** No M5 code exists and none should be
-written until the plan is reviewed. The first task, if it is accepted, is slice 1
-of `docs/operations/m5-plan.md` and nothing beyond it.
+M5 has begun, one slice of six.** The next task is slice 2 of
+`docs/operations/m5-plan.md` and nothing beyond it.
 
-One finding from the M5 review applies to code that exists **today**, so it
-should not wait for M5: `ActiveRepositoryRuns` (`sqlite/backups.go:514`) and
-`ActiveRuns` (`sqlite/runs.go:180`) hardcode `status IN ('PENDING','RUNNING')`.
-That is correct for M4, whose runs only ever occupy those two active states, so
-nothing is broken now. It becomes a false-success hazard the moment the state
-machine widens, and it would not fail any existing test. See §3.7 of the plan.
+Two product decisions are **pending user input** and must not be implemented as
+though they were settled. Neither blocks slices 2 to 4:
+
+- Which disk a scheduled `BACKUP_LATEST` should prefer when several authorized
+  disks are connected (ARCHITECTURE open question 3). §14 already settles that
+  backup is *permitted* to any enabled registered disk; only the preference is
+  open.
+- Whether a schedule may fire while an earlier run of the same job is still
+  running, or should be skipped with a recorded reason.
+
+The standing hazard for slice 3: `ActiveRepositoryRuns` (`sqlite/backups.go:514`)
+and `ActiveRuns` (`sqlite/runs.go:180`) still list `status IN ('PENDING',
+'RUNNING')` literally. That is still correct, because slice 1 writes no new
+status. It becomes a false-success hazard in the same commit that first writes
+one, and no existing test would catch it. See §3.7 of the plan.
 
 Two negative results the next operator should not spend time rediscovering:
 
