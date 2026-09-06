@@ -19,7 +19,7 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 | M2 collection | Implemented; the live daemon collected the real SMB share three more times, including an `archive_then_sync` run that displaced a replaced and a removed file into a recorded revision batch. One reporting defect found and fixed (see below). |
 | M3 media | Implemented; prior loop-device evidence exists, and mount/sync/unmount ran cleanly through the daemon during the loop-image backup run. Physical removal acceptance remains separate. |
 | M4 backup | Implemented, acceptance OPEN. See the evidence matrix below for what is proven and on what media. Live loop-image work covers manual backup, the changed/deleted round trip, explicit verification and a graceful interruption. The process-crash sweep-and-adopt path is proven across a real process boundary but on fake media; lock refusal is fault-injected because it is not demonstrable live. Physical USB acceptance is separate and still deferred. |
-| M5 scheduler | Slice 1 of 6 implemented: migration `005` plus the run status/trigger enums. Schema only — no scheduler, no dispatcher, no automatic run, no UI. Automation is inert: with no `jobs` and no `schedules` rows nothing evaluates. Plan and remaining slices in `docs/operations/m5-plan.md`. |
+| M5 scheduler | Slices 1-2 of 6 implemented: migration `005` with the run status/trigger enums, and `internal/schedule` (pure occurrence arithmetic and idempotency keys). No scheduler loop, dispatcher, automatic run or UI yet. Automation is inert: with no `jobs` and no `schedules` rows nothing evaluates. Plan and remaining slices in `docs/operations/m5-plan.md`. |
 | M6 rotation | Planned. |
 | M7 reporting | Planned. |
 | M8 retention | Planned. |
@@ -145,9 +145,13 @@ why, not as outstanding work. The only open item is 11.
     `RunStatus`/`RunTrigger` enum widening. Schema only; nothing writes a new
     status. Two §18 divergences kept deliberately and documented in the migration
     header (`runs.source_id`/`summary` retained, `DEMO` kind retained).
-13. **Open — next is M5 slice 2**, the pure schedule arithmetic (weekday mask,
-    local time, timezone, DST rules, idempotency key). No product decision blocks
-    it. Do not treat local/fake-media tests as USB acceptance.
+13. Implemented M5 slice 2: `internal/schedule`, pure occurrence arithmetic and
+    idempotency key derivation. Both daylight-saving edges, non-hour shifts,
+    week wrap, boundary and validation cases are tested. No I/O, no loop.
+14. **Open — next is M5 slice 3**, durable intent creation and startup
+    reconciliation. It is the first slice that writes a new run status, so it
+    must widen `ActiveRepositoryRuns`/`ActiveRuns` in the same commit (§3.7 of
+    the plan). Do not treat local/fake-media tests as USB acceptance.
 
 ## Follow-through evidence and actual blocker
 
@@ -264,19 +268,12 @@ why, not as outstanding work. The only open item is 11.
 
 ## Continuation
 
-2026-09-06 coordinator checkpoint: task08 (M5 plan, docs only) hit the Claude
-subscription limit; CLI reports reset 09:00 Europe/Warsaw. Resume scheduled for
-09:01, with no polling before then. `docs/operations/m5-plan.md` is an uncommitted
-draft, not an approved plan. No M5 implementation started. Resume task08 to finish
-the plan and review its proposed product decisions before implementation; do not
-treat its disk-selection or timeout proposals as accepted architecture.
-
 The current position: **M4 software is complete and reviewed but not accepted;
-M5 has begun, one slice of six.** The next task is slice 2 of
-`docs/operations/m5-plan.md` and nothing beyond it.
+M5 has begun, two slices of six.** The plan in `docs/operations/m5-plan.md` is
+reviewed and accepted. The next task is slice 3 and nothing beyond it.
 
 Two product decisions are **pending user input** and must not be implemented as
-though they were settled. Neither blocks slices 2 to 4:
+though they were settled. Neither blocks slices 3 to 4:
 
 - Which disk a scheduled `BACKUP_LATEST` should prefer when several authorized
   disks are connected (ARCHITECTURE open question 3). §14 already settles that
@@ -287,9 +284,15 @@ though they were settled. Neither blocks slices 2 to 4:
 
 The standing hazard for slice 3: `ActiveRepositoryRuns` (`sqlite/backups.go:514`)
 and `ActiveRuns` (`sqlite/runs.go:180`) still list `status IN ('PENDING',
-'RUNNING')` literally. That is still correct, because slice 1 writes no new
+'RUNNING')` literally. That is still correct, because slices 1 and 2 write no new
 status. It becomes a false-success hazard in the same commit that first writes
 one, and no existing test would catch it. See §3.7 of the plan.
+
+One thing slice 2 settled that is worth not re-deciding: the idempotency key is
+derived from job, nominal due time and trigger kind, exactly as §13 says, and so
+does **not** include the schedule. Two schedules on one job that fall on the same
+nominal minute therefore deduplicate to a single run. A test asserts it so the
+behaviour cannot drift silently.
 
 Two negative results the next operator should not spend time rediscovering:
 

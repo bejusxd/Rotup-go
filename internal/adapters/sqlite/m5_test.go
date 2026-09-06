@@ -85,8 +85,8 @@ func buildM4Database(t *testing.T) m4Fixture {
 	stamp := formatTime(at)
 
 	// A demo run from M1, a finished collection, a finished backup, and one run
-	// left PENDING. The pending row matters: it is the only active status an M4
-	// database can hold, and it must still be active afterwards.
+	// left PENDING. The pending row matters because it is active: an M4 database
+	// can hold PENDING or RUNNING, and either must still be active afterwards.
 	exec(`INSERT INTO runs (id, kind, trigger_kind, status, summary, summary_json,
 			requested_at, started_at, finished_at, updated_at)
 		VALUES (?, 'DEMO', 'MANUAL', 'SUCCEEDED', 'demo', '{}', ?, ?, ?, ?)`,

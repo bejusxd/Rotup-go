@@ -234,7 +234,7 @@ Each slice is one commit, independently reviewable, and leaves the tree green.
 | # | Slice | Tests |
 |---|---|---|
 | ~~1~~ | ~~Migration `005` + domain enums.~~ **Done** — see §9. | — |
-| 2 | `internal/schedule`: pure next-run arithmetic + idempotency key. No I/O. | Table tests for weekday masks, week wrap, disabled; **DST spring-forward and fall-back**; the doubled hour produces one key |
+| ~~2~~ | ~~`internal/schedule`: pure next-run arithmetic + idempotency key.~~ **Done** — see §9. | — |
 | 3 | Durable intent creation and startup reconciliation: `domain.ActiveRunStatuses()` driving both active-run queries (§3.7), create runs idempotently from due schedules, sweep all active statuses, recompute due times, at-most-one catch-up. **This is the first slice that writes a new status, so the sweep widening lands here.** | Fake clock; duplicate firing rejected; a daemon down for a week enqueues one run, not seven; a crash in each new non-terminal status is swept; the M4 crash spike still passes unchanged |
 | 4 | `internal/coordinator`: named locks over the existing barrier, source locks and disk leases, in sorted order. | Two collections overlap; backup excludes collection; acquisition order is stable; no deadlock under concurrent demand; release on every path |
 | 5 | Scheduler loop, worker pools, `WAITING_FOR_RESOURCE`, coalescing, retry and timeout. | Coalescing marks the older run `SUPERSEDED` and keeps it auditable; a manual run is never coalesced; missing media waits without consuming `attempt_count`; retry deadline exhaustion; timeout produces `TIMED_OUT` with no adopted snapshot |
@@ -330,7 +330,51 @@ Still true, and unchanged by this slice: `ActiveRepositoryRuns` and `ActiveRuns`
 still list `PENDING` and `RUNNING` literally. That remains correct because this
 slice writes no new status. Slice 3 owns the widening (§3.7).
 
-Next: **slice 2**, the pure schedule arithmetic. It needs no product decisions.
+### Slice 2 — done
+
+`internal/schedule` computes occurrences and idempotency keys. Pure arithmetic:
+no database, no clock of its own, no runs.
+
+Both daylight-saving edges fall out of one definition — *the earliest instant on
+the target local date whose wall clock has reached the configured time* — rather
+than from two special cases:
+
+- **Spring forward.** A configured 02:30 on a day that jumps 02:00 → 03:00 fires
+  at 03:00, the first valid instant. Skipping the day would silently lose a
+  backup, and firing at 03:30 would drift.
+- **Fall back.** A configured 02:30 on a day where 02:30 happens twice fires on
+  the first pass only. Asked again from between the two passes, or from the
+  second one, the schedule moves to the next selected day rather than firing
+  again on the repeated hour.
+
+The scan is minute-by-minute over the local day, which is why nothing assumes an
+hour: `Australia/Lord_Howe`, which shifts by thirty minutes, is tested and
+behaves identically.
+
+The nominal local due identity is carried separately from the instant. Both
+passes of a repeated hour share one `Nominal`, so they cannot produce two keys.
+
+Key encoding is `rotup/v1|job=…|due=…|trigger=…` with every value percent-encoded
+to an unreserved alphabet, so no value can imitate a delimiter — a job named
+`a|due=…|trigger=…|x` provably does not collide with a plain one. The version
+prefix is stored because the keys live in a UNIQUE column and a future
+derivation must not be able to collide with this one.
+
+**Reported, not invented:** the key is derived from job, nominal due time and
+trigger kind exactly as §13 specifies, and therefore **not** from the schedule.
+Two schedules on one job landing on the same nominal minute deduplicate to a
+single run. That is what the normative text says; it is asserted by a test so
+that changing it has to be deliberate. Weekday bit N is `time.Weekday(N)`
+(Sunday = bit 0), documented because §18 constrains the mask to 1..127 without
+fixing an order.
+
+`time/tzdata` is imported so a host without zoneinfo cannot make schedules
+unevaluatable. The standard library uses it only as a fallback, so an up-to-date
+system database still wins.
+
+Next: **slice 3**, durable intent creation and startup reconciliation. This is
+the slice that first writes a new status, so it owns the §3.7 widening in the
+same commit.
 
 ## 8. Review note
 
