@@ -19,7 +19,7 @@ Preserve `docs/ARCHITECTURE.md` and existing media identity/recovery invariants.
 | M2 collection | Implemented; the live daemon collected the real SMB share three more times, including an `archive_then_sync` run that displaced a replaced and a removed file into a recorded revision batch. One reporting defect found and fixed (see below). |
 | M3 media | Implemented; prior loop-device evidence exists, and mount/sync/unmount ran cleanly through the daemon during the loop-image backup run. Physical removal acceptance remains separate. |
 | M4 backup | Implemented, acceptance OPEN. See the evidence matrix below for what is proven and on what media. Live loop-image work covers manual backup, the changed/deleted round trip, explicit verification and a graceful interruption. The process-crash sweep-and-adopt path is proven across a real process boundary but on fake media; lock refusal is fault-injected because it is not demonstrable live. Physical USB acceptance is separate and still deferred. |
-| M5 scheduler | Not started; held until M4 acceptance and explicit scope review. |
+| M5 scheduler | Not started. The M4 readiness review recommends development may begin; awaiting coordinator decision. Note the milestone gate is M4 *software* readiness, not M4 acceptance, which needs hardware. |
 | M6 rotation | Planned. |
 | M7 reporting | Planned. |
 | M8 retention | Planned. |
@@ -71,20 +71,29 @@ stand-in disk lease: real restic, real SQLite, real orchestration, no mount.
 | Lost completion commit | `TestSpikeCompletionCommitFailureIsRecoverableWithoutAnotherBackup` | fake |
 | Wrong identity / damaged repository / missing roots | spike suite | fake |
 
-Remaining **software** gaps:
+Remaining items, with the milestone ARCHITECTURE assigns them to. The readiness
+review concluded none of these is an M4 software blocker; see
+`docs/operations/m4-readiness.md`.
 
-- Adoption after a crash has been proven only on fake media. The live loop-image
-  equivalent would need an ungraceful kill of a daemon holding the acceptance
-  fixture, which no task has authorised.
-- No `--read-data` verification anywhere: `restic check` is structural only.
-- Round trips have never covered renames, directory removal, or a file that
-  reappears after being archived.
+- Crash-and-adopt is proven across a real process boundary but on fake media.
+  Exercising the hardware matrix is **M9**.
+- Verification cadence and `--read-data` policy in the product are **M8**. An
+  ad-hoc read-only `restic check --read-data` over the live test repository read
+  all 12 packs across all 5 snapshots with no errors, so the stored data itself
+  is known good.
+- Renames, directory removal and re-appearing files in round trips are **M2/M8**
+  reconciliation edge cases, not the M4 manual path.
+- Escrow procedure and recovery drill (ARCHITECTURE open question 7) block
+  **production use** of M4, not M5 development.
 
 Deferred, and not substitutable by any of the above: **physical USB acceptance** —
 real removal, power loss, hotplug, and Linux mount permissions on real hardware.
 A green spike suite and a green loop-image run are not evidence about hardware.
 
 ## Work queue
+
+Items 1-10 are **done**; they are kept as a record of what was implemented and
+why, not as outstanding work. The only open item is 11.
 
 1. Implemented installer fix: reject unsafe directory ancestors and stop dependent
    runtime/data/config mutations after parent refusal. Isolated regression tests
@@ -118,9 +127,19 @@ A green spike suite and a green loop-image run are not evidence about hardware.
    fresh service sweeps the abandoned `RUNNING` row, grants nothing on its own,
    then adopts exactly once on explicit recovery with the restored bytes checked
    by the restic binary directly. Fake media, so still not USB acceptance.
-10. Reconcile the live WSL runtime with the approved installation layout, then
-   resume M4 acceptance only with positively identified test media. Do not treat
-   local/fake-media tests as USB acceptance.
+10. Reviewed M4 software readiness against the normative ARCHITECTURE text and
+    recorded the outcome in `docs/operations/m4-readiness.md`: no software
+    blocker found, and much of what had been carried as an "M4 gap" is assigned
+    by ARCHITECTURE to M8 (`restic check`, retention, low space) or M9 (crash,
+    surprise removal, hardware matrix, packaging, runbooks). A read-only
+    `restic check --read-data` over the live test repository read all 12 packs
+    across all 5 snapshots with no errors. Recommendation: M4 software is
+    sufficient to begin M5 development; M4 must not be recorded as accepted, and
+    production use stays blocked on open question 7 (escrow).
+11. **Open — awaiting coordinator decision.** If the readiness recommendation is
+    accepted, begin M5 with a written design, not code. Otherwise, reconcile the
+    live WSL runtime with the approved installation layout. Either way, do not
+    treat local/fake-media tests as USB acceptance.
 
 ## Follow-through evidence and actual blocker
 
@@ -237,19 +256,25 @@ A green spike suite and a green loop-image run are not evidence about hardware.
 
 ## Continuation
 
-Task 04 is **finished**, not pending: the interruption drill ran and is recorded
-in m4-loop-acceptance.md (exercise 4, commit `a4940f6`). Do not repeat it. The
-earlier note here about it stopping at a usage limit described a state that no
-longer exists and has been removed so it cannot be re-run by mistake.
+All operator tasks through the M4 readiness review are finished. Nothing in the
+queue above is waiting to be executed except item 11, which needs a coordinator
+decision rather than work.
 
-Task 05 (lock refusal) is also finished; see exercise 5. Its outcome is a
-negative result about the live fixture that the next operator should not spend
-time rediscovering: with restic 0.17.3 there is **no safe way to hold a lock on
-the acceptance repository that would make ROTUP's verification refuse**, because
-verification only takes non-exclusive locks and non-exclusive locks coexist.
-Do not go looking for one, and in particular do not reach for `prune`,
-`forget --prune`, `repair` or `migrate` to manufacture an exclusive lock on a
-repository holding acceptance evidence.
+The current position: **M4 software is complete and reviewed; M4 is not
+accepted.** The recommendation, its evidence mapping and its two conditions are
+in `docs/operations/m4-readiness.md`. The next task is either an M5 design
+document or installation-layout reconciliation, depending on that decision. No
+M5 implementation has been started and none should be until the coordinator
+responds.
+
+Two negative results the next operator should not spend time rediscovering:
+
+- Lock refusal cannot be demonstrated live with restic 0.17.3, because
+  verification takes only non-exclusive locks and those coexist. Do not reach for
+  `prune`, `forget --prune`, `repair` or `migrate` to manufacture an exclusive
+  lock on a repository holding acceptance evidence. It is covered by tests.
+- A daemon started from a `wsl.exe` invocation does not survive a WSL shutdown;
+  relaunch it with the guarded restart script after one.
 
 Read this checkpoint, actual HEAD/status and installation/m4 operations docs.
 Check for active writers before dispatch. Finish the first unresolved queue item,
