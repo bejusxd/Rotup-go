@@ -445,8 +445,10 @@ times unchanged. Do not skip/supersede these occurrences merely because an
 earlier run is still active. This does not change BACKUP_LATEST into a request
 for a historical staging version.
 
-The user prefers the "newest" available disk; the exact ranking field still
-needs clarification. The request not to use a password also needs clarification
+The user clarified disk preference: choose the most recently connected of the
+available eligible disks. Polling an already connected disk is not a new
+connection; registration and latest-backup timestamps do not define this order.
+The request not to use a password still needs clarification
 against existing repository setup/encryption: stored credentials already avoid
 interactive prompts during ordinary backups. No password or escrow guard has
 been removed.

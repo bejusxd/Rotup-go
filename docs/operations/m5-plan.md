@@ -206,10 +206,14 @@ user upgraded.
   coalescing proposal wherever it would discard one of these scheduled runs.
   It does not request historical staging reconstruction: BACKUP_LATEST still
   reads the current eligible staging state when its barrier is acquired.
-- Prefer the "newest" available eligible disk. The ranking field still needs
-  clarification (latest successful backup, latest connection, or latest
-  registration); do not implement an assumed ordering. UUID verification and
-  repository eligibility remain mandatory.
+- Prefer the most recently connected available eligible disk (user clarified
+  "ostatnio podpiety"). This supersedes the oldest-backup preference in proposal
+  1 below. Connection recency is not registration time, backup time or the latest
+  polling observation: repeatedly observing a connected disk must not make it
+  newly connected. UUID verification and repository eligibility remain mandatory.
+  Dispatcher implementation must cover reconnects and deterministic ties, and
+  must not claim to know physical connection order during daemon downtime when
+  that order was not observed.
 - Physical acceptance remains deferred. The user wants a deployment for
   end-to-end testing during the coming weekend, not a claim of production
   acceptance. Password-free operation was requested but its meaning remains
