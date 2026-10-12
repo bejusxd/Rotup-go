@@ -432,3 +432,26 @@ swept on startup. Review 5953025 and run proportional independent tests before
 accepting slice 3; do not start slice 4 prematurely. Task14 produced no tracked
 changes. Retained prompt/result: .cache/operator/claude-task-14.txt and .jsonl.
 Disk-preference and overlapping-tick product decisions remain pending.
+
+### Return to work — user decisions, 2026-10-12
+
+Claude is no longer the executor; continuation is through the current coding
+agent. HEAD on inspection was `229ee24`, with a clean working tree. No fresh
+test run or runtime deployment is claimed by this documentation checkpoint.
+
+The user resolved overlapping schedule occurrences: queue the new occurrence
+for delayed execution, preserve its nominal due time and leave future schedule
+times unchanged. Do not skip/supersede these occurrences merely because an
+earlier run is still active. This does not change BACKUP_LATEST into a request
+for a historical staging version.
+
+The user prefers the "newest" available disk; the exact ranking field still
+needs clarification. The request not to use a password also needs clarification
+against existing repository setup/encryption: stored credentials already avoid
+interactive prompts during ordinary backups. No password or escrow guard has
+been removed.
+
+Hardware acceptance remains deferred. Target: deploy for full-system testing
+on the coming weekend (2026-10-17/18), subject to validation, not production
+acceptance. Next engineering task remains the bounded slice 3 review described
+above, then the remaining M5 slices. No runtime behaviour changed here.

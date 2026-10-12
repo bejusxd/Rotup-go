@@ -197,6 +197,28 @@ user upgraded.
 
 ## 4. Unresolved product decisions, with proposed defaults
 
+### User decisions — 2026-10-12 (override older proposals below)
+
+- When another scheduled occurrence arrives while the previous run is active,
+  queue it for delayed execution, retaining its original nominal due time. Do
+  not silently skip or supersede that occurrence. Execution delay must not shift
+  subsequent schedule times. This supersedes proposal 5 below and the earlier
+  coalescing proposal wherever it would discard one of these scheduled runs.
+  It does not request historical staging reconstruction: BACKUP_LATEST still
+  reads the current eligible staging state when its barrier is acquired.
+- Prefer the "newest" available eligible disk. The ranking field still needs
+  clarification (latest successful backup, latest connection, or latest
+  registration); do not implement an assumed ordering. UUID verification and
+  repository eligibility remain mandatory.
+- Physical acceptance remains deferred. The user wants a deployment for
+  end-to-end testing during the coming weekend, not a claim of production
+  acceptance. Password-free operation was requested but its meaning remains
+  unresolved; do not remove repository-password or escrow validation while
+  clarifying it. Existing stored passwords already allow unattended runs.
+
+These are requirements, not implemented behaviour. Slice 3 review remains the
+next engineering checkpoint before dispatcher work.
+
 | # | Question | Proposed safe default | Grounding |
 |---|---|---|---|
 | 1 | Which disk does a scheduled `BACKUP_LATEST` target before rotation exists (M6)? | Any registered, enabled disk that is connected and whose repository is established and healthy. Never block. Among several, prefer the one with the oldest `last_successful_backup_at` (never-backed-up first). | §14 is explicit that an unexpected but enabled registered disk "continues safety validation and **permits backup**" and is recorded against the actual disk. Permission is not a rotation question. Open question 3 asks only which to *prefer*, so the tie-break is provisional and M6 supersedes it |
