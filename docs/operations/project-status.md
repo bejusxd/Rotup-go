@@ -1,6 +1,6 @@
 # ROTUP operator checkpoint
 
-Updated: 2026-09-05. Initial baseline: `f7c6de8`; first operator fix: `d4ff71b`.
+Updated: 2026-10-17. Initial baseline: `f7c6de8`; first operator fix: `d4ff71b`.
 
 ## Operating mandate
 
@@ -457,3 +457,29 @@ Hardware acceptance remains deferred. Target: deploy for full-system testing
 on the coming weekend (2026-10-17/18), subject to validation, not production
 acceptance. Next engineering task remains the bounded slice 3 review described
 above, then the remaining M5 slices. No runtime behaviour changed here.
+
+### Slice 3 review closed — 2026-10-17
+
+The earlier review-pending checkpoint is superseded. Fixed two reproduced
+planner defects: catch-up stopped after 512 old occurrences rather than reaching
+the latest, and multiple schedules created multiple startup catch-ups for one
+job. Startup `CatchUp` now groups by job and atomically advances all covered
+schedule cursors; stale snapshots cannot create a second catch-up. Ordinary
+`Tick` separately preserves every due occurrence while preceding runs are active,
+implementing the user's queued-overlap requirement at the planning boundary.
+
+New regressions also prove that a scheduled backup intent without backup metadata
+is safely swept on restart, without suspecting untouched media or granting
+success. Existing recovery logic already handled this; only its comment and
+tests needed expansion. The real-restic process-crash/adoption spike is unchanged
+and passed again. Full Linux Go tests, vet and both builds pass; focused
+schedule/orchestrator/SQLite race checks pass. Architecture and migrations are
+unchanged. No live database, disk or repository was used or changed.
+
+**Next: M5 slice 4, resource coordination.** Then runtime dispatch and the
+latest-connected eligible disk policy, waiting/retry/timeouts, and the jobs UI
+and collection-to-backup chaining. The planner is still not wired into the
+daemon: this checkpoint does not enable automatic backups or finish M5.
+Application startup must sweep -> Reconcile -> CatchUp once, then Tick normally.
+Physical USB acceptance and escrow/recovery drill remain deferred; no deployment
+or production-readiness claim is made.

@@ -127,6 +127,19 @@ type ScheduledIntent struct {
 	NominalDueAt string
 	// NextRunAt is where the schedule's bookkeeping moves to.
 	NextRunAt time.Time
+	// CatchUp advances all overdue schedules of this job together with its one
+	// startup intent. Empty for normal ticks, which preserve each occurrence.
+	CatchUp []ScheduleAdvance
+}
+
+// ScheduleAdvance is the observed cursor and its replacement for startup
+// catch-up. ExpectedNextRunAt prevents a delayed planner from committing a
+// different catch-up after another caller has already consumed the same backlog.
+type ScheduleAdvance struct {
+	ScheduleID        string
+	ExpectedNextRunAt time.Time
+	NominalDueAt      string
+	NextRunAt         time.Time
 }
 
 // ClaimScheduledRun creates a scheduled run and advances its schedule in one
@@ -154,6 +167,12 @@ func (s *Store) ClaimScheduledRun(ctx context.Context, intent ScheduledIntent) (
 	claimed := false
 	err := s.withWriteTx(ctx, func(tx *sql.Tx) error {
 		claimed = false
+		if len(intent.CatchUp) > 0 {
+			matches, err := catchUpMatches(ctx, tx, intent)
+			if err != nil || !matches {
+				return err
+			}
+		}
 		run := intent.Run
 		if run.SummaryJSON == "" {
 			run.SummaryJSON = "{}"
@@ -182,6 +201,18 @@ func (s *Store) ClaimScheduledRun(ctx context.Context, intent ScheduledIntent) (
 			return fmt.Errorf("read the claimed run: %w", err)
 		}
 		claimed = ownerID == run.ID
+
+		if len(intent.CatchUp) > 0 {
+			for _, advance := range intent.CatchUp {
+				if _, err := tx.ExecContext(ctx, `UPDATE schedules
+					SET last_nominal_run_at = ?, next_run_at = ?, updated_at = ? WHERE id = ?`,
+					advance.NominalDueAt, formatTime(advance.NextRunAt),
+					formatTime(run.UpdatedAt), advance.ScheduleID); err != nil {
+					return fmt.Errorf("advance catch-up schedule %q: %w", advance.ScheduleID, err)
+				}
+			}
+			return nil
+		}
 
 		// The comparison is on the nominal identity, not on next_run_at.
 		// Nominal values are canonical fixed-width "YYYY-MM-DDTHH:MM", so text
@@ -234,6 +265,44 @@ func (s *Store) ClaimScheduledRun(ctx context.Context, intent ScheduledIntent) (
 		return false, err
 	}
 	return claimed, nil
+}
+
+func catchUpMatches(ctx context.Context, tx *sql.Tx, intent ScheduledIntent) (bool, error) {
+	primary := false
+	seen := make(map[string]bool, len(intent.CatchUp))
+	for _, advance := range intent.CatchUp {
+		if seen[advance.ScheduleID] || !advance.NextRunAt.After(advance.ExpectedNextRunAt) {
+			return false, fmt.Errorf("invalid catch-up advancement for schedule %q", advance.ScheduleID)
+		}
+		seen[advance.ScheduleID] = true
+		if advance.ScheduleID == intent.ScheduleID {
+			primary = advance.NominalDueAt == intent.NominalDueAt && advance.NextRunAt.Equal(intent.NextRunAt)
+		}
+		var current, nominal sql.NullString
+		var jobID string
+		var enabled, jobEnabled int
+		if err := tx.QueryRowContext(ctx, `SELECT s.job_id, s.next_run_at,
+			s.last_nominal_run_at, s.enabled, j.enabled FROM schedules s
+			JOIN jobs j ON j.id = s.job_id WHERE s.id = ?`, advance.ScheduleID).
+			Scan(&jobID, &current, &nominal, &enabled, &jobEnabled); err != nil {
+			return false, fmt.Errorf("read catch-up schedule %q: %w", advance.ScheduleID, err)
+		}
+		if jobID != intent.JobID {
+			return false, fmt.Errorf("catch-up schedule %q belongs to another job", advance.ScheduleID)
+		}
+		at, err := parseTime(current)
+		if err != nil {
+			return false, err
+		}
+		if !current.Valid || !at.Equal(advance.ExpectedNextRunAt) || enabled != 1 || jobEnabled != 1 ||
+			(nominal.Valid && nominal.String > advance.NominalDueAt) {
+			return false, nil
+		}
+	}
+	if !primary {
+		return false, fmt.Errorf("catch-up does not advance its selected schedule")
+	}
+	return true, nil
 }
 
 // SetScheduleNextRun updates only the cached next occurrence. Reconciliation

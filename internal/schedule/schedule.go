@@ -263,6 +263,39 @@ func (s Spec) NextAfter(after time.Time) (Occurrence, bool, error) {
 		"no occurrence was found within eight days of a validated schedule")
 }
 
+// LatestAtOrBefore returns the latest occurrence no later than at. Looking
+// backwards over calendar dates bounds startup work independently of downtime.
+// It uses the same DST resolution as NextAfter, including the first occurrence
+// of an ambiguous wall time. A second week covers a skipped civil date.
+func (s Spec) LatestAtOrBefore(at time.Time) (Occurrence, bool, error) {
+	location, hour, minute, err := s.resolve()
+	if err != nil {
+		return Occurrence{}, false, err
+	}
+	if !s.Enabled {
+		return Occurrence{}, false, nil
+	}
+	year, month, day := at.In(location).Date()
+	// Use UTC for calendar arithmetic so a nonexistent local date cannot be
+	// normalized onto a different weekday before it is checked.
+	date := time.Date(year, month, day, 12, 0, 0, 0, time.UTC)
+	for offset := 0; offset <= 14; offset++ {
+		candidate := date.AddDate(0, 0, -offset)
+		if !s.Days.Contains(candidate.Weekday()) {
+			continue
+		}
+		y, m, d := candidate.Date()
+		instant, found := firstInstantOnDateAtOrAfter(location, y, m, d, hour, minute)
+		if found && !instant.After(at) {
+			return Occurrence{At: instant, Nominal: Nominal{
+				Date: candidate.Format("2006-01-02"), Time: s.LocalTime,
+			}}, true, nil
+		}
+	}
+	return Occurrence{}, false, domain.NewError(domain.ErrClassInvariant, "schedule_no_occurrence",
+		"no recent occurrence was found for a validated schedule")
+}
+
 // firstInstantOnDateAtOrAfter finds the earliest instant on one local calendar
 // date whose wall clock has reached the requested time.
 //

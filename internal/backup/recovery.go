@@ -80,7 +80,9 @@ func (s *Service) recoverRun(ctx context.Context, run domain.Run, report *Recove
 		return err
 	}
 	if backup == nil {
-		// A DISK_SETUP or VERIFY run. The repository sweep above handles a
+		// A scheduled backup intent may not have selected a target or created
+		// backup metadata yet. It is interrupted without suspecting any disk.
+		// This also covers DISK_SETUP or VERIFY. The sweep above handles a
 		// setup that was left mid-flight; a verification writes nothing, so
 		// there is nothing further to undo.
 		s.event(ctx, domain.SeverityWarning, "repository.recovery_started", eventRefs{RunID: run.ID},

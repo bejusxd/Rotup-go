@@ -26,13 +26,6 @@ type Store interface {
 	SetScheduleNextRun(ctx context.Context, scheduleID string, nextRunAt, updatedAt time.Time) error
 }
 
-// maxCatchUpSteps bounds how far the planner will walk forward looking for the
-// most recent missed occurrence. A daemon down for a year would otherwise make
-// this loop proportional to the outage. Past the bound the planner stops
-// searching and treats the schedule as simply overdue now, which errs towards
-// running once rather than not at all.
-const maxCatchUpSteps = 512
-
 // Options configures a planner.
 type Options struct {
 	Store  Store
@@ -72,9 +65,8 @@ func New(options Options) *Planner {
 type TickReport struct {
 	// Created counts intents this pass actually wrote.
 	Created int
-	// AlreadyClaimed counts due occurrences some other caller had already
-	// written. They are not failures and not duplicates; they are the
-	// idempotency key doing its job.
+	// AlreadyClaimed counts duplicate occurrences or catch-up views made stale
+	// by another caller advancing the schedule. Neither creates another run.
 	AlreadyClaimed int
 	// Skipped counts schedules that could not be evaluated, each with a reason
 	// already logged.
@@ -88,12 +80,11 @@ type TickReport struct {
 // the architecture's run machine — and the schedule bookkeeping that goes with
 // it, committed together.
 //
-// One thing it deliberately does not do is decide what to do about a job whose
-// previous run is still going. Whether an overlapping occurrence should be
-// skipped or queued is an unanswered product question, and guessing it here
-// would bake an answer into durable state before anyone chose one. Until it is
-// answered, this creates the intent and leaves the decision to the dispatcher
-// that does not exist yet.
+// Each tick claims at most one occurrence per schedule, oldest first. If the
+// dispatcher is busy, subsequent occurrences still become durable pending work;
+// they are not skipped or coalesced. A delayed tick leaves the remaining backlog
+// due for the next tick rather than shifting the schedule or discarding it.
+// Startup downtime is handled separately by CatchUp, before ordinary ticking.
 func (p *Planner) Tick(ctx context.Context) (TickReport, error) {
 	var report TickReport
 	now := p.now()
@@ -103,7 +94,7 @@ func (p *Planner) Tick(ctx context.Context) (TickReport, error) {
 		return report, err
 	}
 	for _, pair := range scheduled {
-		due, ok, err := p.dueOccurrence(pair, now)
+		due, ok, err := p.dueOccurrence(pair, now, false)
 		if err != nil {
 			report.Skipped++
 			p.logger.Warn("a schedule could not be evaluated",
@@ -126,17 +117,73 @@ func (p *Planner) Tick(ctx context.Context) (TickReport, error) {
 	return report, nil
 }
 
-// dueOccurrence decides whether a schedule has an occurrence to claim now, and
-// which one.
-//
-// When the daemon has been down, several occurrences may have passed. The
-// architecture allows at most one catch-up per job, and this picks the most
-// recent of the missed occurrences rather than the oldest. The nominal due time
-// is recorded on the run and shown in history, and a run labelled with a due
-// time from three days ago would be claiming to be something it is not: it will
-// collect or back up whatever is current when it executes, not what was current
-// then.
-func (p *Planner) dueOccurrence(pair sqlite.ScheduledJob, now time.Time) (schedule.Occurrence, bool, error) {
+// CatchUp is the startup-only pass, after recovery and Reconcile. It creates at
+// most one intent per job, even if several of that job's schedules are overdue.
+// All covered schedule cursors advance atomically with the selected latest
+// intent. Do not call it from the regular loop: Tick preserves queued deadlines.
+func (p *Planner) CatchUp(ctx context.Context) (TickReport, error) {
+	var report TickReport
+	now := p.now()
+	scheduled, err := p.store.ActiveSchedules(ctx)
+	if err != nil {
+		return report, err
+	}
+	type catchUp struct {
+		pair     sqlite.ScheduledJob
+		due      schedule.Occurrence
+		advances []sqlite.ScheduleAdvance
+	}
+	groups := make(map[string]*catchUp)
+	var order []string
+	for _, pair := range scheduled {
+		due, ok, err := p.dueOccurrence(pair, now, true)
+		if err != nil {
+			report.Skipped++
+			p.logger.Warn("a schedule could not be evaluated for catch-up",
+				"schedule_id", pair.Schedule.ID, "job_id", pair.Job.ID, "error", err)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		next, ok, err := specOf(pair.Schedule).NextAfter(due.At)
+		if err != nil {
+			return report, err
+		}
+		if !ok {
+			return report, domain.NewError(domain.ErrClassInvariant, "schedule_has_no_next_occurrence",
+				"a due catch-up schedule has no following occurrence")
+		}
+		group := groups[pair.Job.ID]
+		if group == nil {
+			group = &catchUp{pair: pair, due: due}
+			groups[pair.Job.ID] = group
+			order = append(order, pair.Job.ID)
+		} else if due.At.After(group.due.At) ||
+			(due.At.Equal(group.due.At) && pair.Schedule.ID < group.pair.Schedule.ID) {
+			group.pair, group.due = pair, due
+		}
+		group.advances = append(group.advances, sqlite.ScheduleAdvance{
+			ScheduleID: pair.Schedule.ID, ExpectedNextRunAt: *pair.Schedule.NextRunAt,
+			NominalDueAt: due.Nominal.String(), NextRunAt: next.At,
+		})
+	}
+	for _, jobID := range order {
+		group := groups[jobID]
+		claimed, err := p.claim(ctx, group.pair, group.due, now, group.advances...)
+		if err != nil {
+			return report, err
+		}
+		if claimed {
+			report.Created++
+		} else {
+			report.AlreadyClaimed++
+		}
+	}
+	return report, nil
+}
+
+func (p *Planner) dueOccurrence(pair sqlite.ScheduledJob, now time.Time, catchUp bool) (schedule.Occurrence, bool, error) {
 	spec := specOf(pair.Schedule)
 	if err := spec.Validate(); err != nil {
 		return schedule.Occurrence{}, false, err
@@ -152,27 +199,19 @@ func (p *Planner) dueOccurrence(pair sqlite.ScheduledJob, now time.Time) (schedu
 		return schedule.Occurrence{}, false, nil
 	}
 
-	// The cached instant is due. Walk forward to find the most recent occurrence
-	// that is also due, so a long outage collapses to one run.
-	cursor := pair.Schedule.NextRunAt.Add(-time.Minute)
-	var latest schedule.Occurrence
-	found := false
-	for step := 0; step < maxCatchUpSteps; step++ {
-		occurrence, ok, err := spec.NextAfter(cursor)
-		if err != nil {
-			return schedule.Occurrence{}, false, err
-		}
-		if !ok || occurrence.At.After(now) {
-			break
-		}
-		latest, found = occurrence, true
-		cursor = occurrence.At
+	var due schedule.Occurrence
+	var ok bool
+	var err error
+	if catchUp {
+		due, ok, err = spec.LatestAtOrBefore(now)
+	} else {
+		due, ok, err = spec.NextAfter(pair.Schedule.NextRunAt.Add(-time.Nanosecond))
 	}
-	return latest, found, nil
+	return due, ok && !due.At.Before(*pair.Schedule.NextRunAt) && !due.At.After(now), err
 }
 
 func (p *Planner) claim(ctx context.Context, pair sqlite.ScheduledJob,
-	due schedule.Occurrence, now time.Time) (bool, error) {
+	due schedule.Occurrence, now time.Time, advances ...sqlite.ScheduleAdvance) (bool, error) {
 
 	key, err := schedule.RunKey(pair.Job.ID, due.Nominal, domain.RunTriggerScheduled)
 	if err != nil {
@@ -214,6 +253,7 @@ func (p *Planner) claim(ctx context.Context, pair sqlite.ScheduledJob,
 		JobID:          pair.Job.ID,
 		NominalDueAt:   due.Nominal.String(),
 		NextRunAt:      next.At,
+		CatchUp:        advances,
 	})
 }
 
@@ -233,8 +273,7 @@ type ReconcileReport struct {
 // It runs at startup, after the run sweep, and is the counterpart to it: the
 // sweep decides what a dead process left unfinished, and this decides when each
 // schedule is next owed. It claims nothing — a schedule whose time passed while
-// the daemon was down is left due, and the next Tick collapses the whole outage
-// into one intent.
+// the daemon was down is left due for the separate startup CatchUp pass.
 func (p *Planner) Reconcile(ctx context.Context) (ReconcileReport, error) {
 	var report ReconcileReport
 	now := p.now()

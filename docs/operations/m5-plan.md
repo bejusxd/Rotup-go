@@ -1,6 +1,6 @@
 # M5 implementation plan — scheduler and orchestration
 
-Design only. **No M5 code has been written.** This maps the normative
+Original design baseline (superseded by the progress notes below). This maps the normative
 requirements in `docs/ARCHITECTURE.md` (unchanged) onto the code that exists at
 `e9af2e6`, and proposes the smallest conformant path to a working slice.
 
@@ -220,8 +220,9 @@ user upgraded.
   unresolved; do not remove repository-password or escrow validation while
   clarifying it. Existing stored passwords already allow unattended runs.
 
-These are requirements, not implemented behaviour. Slice 3 review remains the
-next engineering checkpoint before dispatcher work.
+The planning layer now preserves overlapping ordinary occurrences; execution
+and disk selection still await the dispatcher. See the 2026-10-17 checkpoint
+below for the completed slice 3 review and startup/ordinary-tick distinction.
 
 | # | Question | Proposed safe default | Grounding |
 |---|---|---|---|
@@ -503,3 +504,57 @@ column list named `next_attempt_at`, which §18 actually calls `retry_not_before
 while omitting `waiting_reason`, `priority`, `superseded_by_run_id`, the `SKIPPED`
 status and `idx_runs_dispatch`. The active-status query hazard in §3.7 was found
 during that second pass and not in the first.
+
+## 10. Slice 3 review completed — 2026-10-17
+
+This section supersedes the historical descriptions of `Tick` catch-up and the
+pending review above. There is still no running scheduler or dispatcher, and M5
+as a whole is NOT complete.
+
+Two planner defects were reproduced before correction:
+
+- After three years offline, the 512-step scan chose `2028-01-31T02:30` rather
+  than the latest due `2029-09-07T02:30`, leaving more overdue work on every tick.
+- Two different overdue schedules for one job created two startup runs, although
+  startup catch-up is bounded per job, not per schedule.
+
+The planner now has separate operations:
+
+1. `Reconcile`: initialize/recompute cached next times without losing overdue
+   demand, as before.
+2. `CatchUp`: startup only, after the recovery sweep and reconciliation. Select
+   the latest missed occurrence per job and atomically advance every covered
+   overdue schedule with the one intent. A backward calendar lookup has bounded
+   cost independent of downtime. The transaction compares the observed cursors
+   before writing, so a delayed caller cannot create a second, differently dated
+   catch-up from the same stale backlog. Any advancement failure rolls all
+   schedule changes and the run back together.
+3. `Tick`: ordinary operation, oldest due occurrence first (at most one per
+   schedule per pass). Preserve every occurrence as pending work even while a
+   previous run is active; a delayed pass drains its backlog over subsequent
+   ticks without changing nominal deadlines or future cadence. No scheduled
+   occurrence is silently coalesced. This implements the user's overlap decision
+   at the planning boundary, not yet actual dispatch.
+
+The future application wiring must use startup recovery -> `Reconcile` ->
+`CatchUp` once, then ordinary `Tick`. Do not call `CatchUp` in the regular loop.
+Startup catch-up covers previously unrecorded downtime occurrences; it must not
+be used to discard already persisted pending work. The dispatcher slice still
+owns safe resumption of interrupted intents and must distinguish an untouched
+intent from a backup requiring explicit repository recovery.
+
+Recovery of scheduled BACKUP_LATEST intents without `backup_runs` metadata was
+already safe. New real-SQLite tests exercise every active status: the sweep
+records INTERRUPTED with an event, creates no backup metadata, does not mark an
+untouched repository suspect, and is idempotent. No recovery safety rule changed.
+
+Regressions cover long downtime, multiple schedules per job, delayed ordinary
+ticks with an active predecessor, stale distinct-occurrence claims in both commit
+orders, concurrent catch-up claims, transactional rollback, DST gaps/repeated
+hours and the half-hour Lord Howe transition. Linux validation: focused tests,
+full Go suite, vet, daemon/helper builds, race tests for schedule/orchestrator/
+SQLite, and the unchanged real-restic process-crash/sweep/adoption spike.
+
+Next: slice 4 (resource coordination), then slice 5 (runtime dispatch, latest
+observed connection preference, waiting/retry/timeouts) and slice 6 (chaining and
+UI). Keep the existing manual paths and the M4 durability boundary intact.

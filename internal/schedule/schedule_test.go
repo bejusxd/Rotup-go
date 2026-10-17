@@ -9,6 +9,42 @@ import (
 
 const warsaw = "Europe/Warsaw"
 
+func TestLatestAtOrBeforeUsesTheSameDSTBoundaryAsNextAfter(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, zone, local, now, want, nominal string
+		days                                  Weekdays
+	}{
+		{"spring gap", warsaw, "02:30", "2026-03-29T01:00:00Z", "2026-03-29T01:00:00Z", "2026-03-29T02:30", AllWeek},
+		{"before spring gap", warsaw, "02:30", "2026-03-29T00:59:59Z", "2026-03-28T01:30:00Z", "2026-03-28T02:30", AllWeek},
+		{"fall second hour", warsaw, "02:30", "2026-10-25T01:45:00Z", "2026-10-25T00:30:00Z", "2026-10-25T02:30", AllWeek},
+		{"half hour gap", "Australia/Lord_Howe", "02:15", "2026-10-03T15:30:00Z", "2026-10-03T15:30:00Z", "2026-10-04T02:15", AllWeek},
+		{"weekly before due", "UTC", "12:00", "2026-09-07T11:59:59Z", "2026-08-31T12:00:00Z", "2026-08-31T12:00", Monday},
+		{"exact boundary", "UTC", "12:00", "2026-09-07T12:00:00Z", "2026-09-07T12:00:00Z", "2026-09-07T12:00", Monday},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			now, err := time.Parse(time.RFC3339, tc.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := time.Parse(time.RFC3339, tc.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec := Spec{Days: tc.days, LocalTime: tc.local, Timezone: tc.zone, Enabled: true}
+			got, ok, err := spec.LatestAtOrBefore(now)
+			if err != nil || !ok || !got.At.Equal(want) || got.Nominal.String() != tc.nominal {
+				t.Fatalf("latest = %#v / %v / %v, want %s (%s)", got, ok, err, want, tc.nominal)
+			}
+			forward, ok, err := spec.NextAfter(got.At.Add(-time.Nanosecond))
+			if err != nil || !ok || !forward.At.Equal(got.At) || forward.Nominal != got.Nominal {
+				t.Fatalf("forward and backward resolution differ: %#v / %v", forward, err)
+			}
+		})
+	}
+}
+
 func mustLoad(t *testing.T, name string) *time.Location {
 	t.Helper()
 	location, err := time.LoadLocation(name)

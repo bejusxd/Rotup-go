@@ -116,6 +116,15 @@ func (h *harness) tick() TickReport {
 	return report
 }
 
+func (h *harness) catchUp() TickReport {
+	h.t.Helper()
+	report, err := h.planner.CatchUp(context.Background())
+	if err != nil {
+		h.t.Fatalf("catch-up: %v", err)
+	}
+	return report
+}
+
 func (h *harness) reconcile() ReconcileReport {
 	h.t.Helper()
 	report, err := h.planner.Reconcile(context.Background())
@@ -227,7 +236,7 @@ func TestDowntimeCollapsesToASingleCatchUp(t *testing.T) {
 		t.Fatalf("reconcile moved an overdue schedule: %v", next)
 	}
 
-	if report := h.tick(); report.Created != 1 {
+	if report := h.catchUp(); report.Created != 1 {
 		t.Fatalf("catch-up created %d run(s), want exactly 1", report.Created)
 	}
 	runs := h.runs()
@@ -321,4 +330,98 @@ func warsaw(t *testing.T) *time.Location {
 		t.Skipf("Europe/Warsaw unavailable: %v", err)
 	}
 	return location
+}
+
+func TestCatchUpAfterYearsAdvancesStraightToTheLatestOccurrence(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.seed(seeded{})
+	h.reconcile()
+	h.now = h.schedule().NextRunAt.AddDate(3, 0, 0).Add(2 * time.Hour)
+	if report := h.catchUp(); report.Created != 1 {
+		t.Fatalf("catch-up = %#v", report)
+	}
+	want := h.now.In(warsaw(t)).Format("2006-01-02") + "T02:30"
+	if got := h.schedule().LastNominalRunAt; got != want {
+		t.Fatalf("claimed %s, want latest occurrence %s", got, want)
+	}
+	if next := h.schedule().NextRunAt; next == nil || !next.After(h.now) {
+		t.Fatalf("catch-up left another overdue occurrence: %v", next)
+	}
+}
+
+func TestCatchUpGroupsDifferentSchedulesOfTheSameJob(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.seed(seeded{})
+	s := h.schedule()
+	s.ID, s.LocalTime = "sched-2", "06:30"
+	if err := h.store.CreateSchedule(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile()
+	h.now = h.schedule().NextRunAt.AddDate(0, 0, 7).Add(8 * time.Hour)
+	if report := h.catchUp(); report.Created != 1 {
+		t.Fatalf("one job must get one catch-up, got %#v", report)
+	}
+	if runs := h.runs(); len(runs) != 1 {
+		t.Fatalf("got %d catch-up runs for one job", len(runs))
+	}
+	for _, id := range []string{"sched-1", "sched-2"} {
+		s, err := h.store.Schedule(context.Background(), id)
+		if err != nil || s == nil || s.NextRunAt == nil || !s.NextRunAt.After(h.now) {
+			t.Fatalf("%s was not advanced beyond downtime: %#v / %v", id, s, err)
+		}
+	}
+	if report := h.catchUp(); report.Created != 0 {
+		t.Fatalf("repeated startup catch-up created more work: %#v", report)
+	}
+	if report := h.tick(); report.Created != 0 {
+		t.Fatalf("ordinary tick re-created collapsed backlog: %#v", report)
+	}
+}
+
+func TestDelayedTicksQueueEveryOccurrenceWhilePreviousRunIsActive(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.seed(seeded{kind: domain.JobKindBackupLatest})
+	h.reconcile()
+	first := *h.schedule().NextRunAt
+	h.now = first
+	h.tick()
+	initial := h.runs()[0]
+	initial.Status = domain.RunStatusRunning
+	if err := h.store.UpdateRun(context.Background(), initial); err != nil {
+		t.Fatal(err)
+	}
+	h.now = first.AddDate(0, 0, 3).Add(time.Hour)
+	for day := 1; day <= 3; day++ {
+		if report := h.tick(); report.Created != 1 {
+			t.Fatalf("delayed day %d: %#v", day, report)
+		}
+		want := first.AddDate(0, 0, day).In(warsaw(t)).Format("2006-01-02") + "T02:30"
+		if got := h.schedule().LastNominalRunAt; got != want {
+			t.Fatalf("lost nominal deadline: got %s, want %s", got, want)
+		}
+	}
+	if report := h.tick(); report.Created != 0 {
+		t.Fatalf("duplicate deadline: %#v", report)
+	}
+	if runs := h.runs(); len(runs) != 4 {
+		t.Fatalf("wanted running original plus three pending deadlines, got %d", len(runs))
+	} else {
+		for _, run := range runs {
+			want := domain.RunStatusPending
+			if run.ID == initial.ID {
+				want = domain.RunStatusRunning
+			}
+			if run.Status != want {
+				t.Fatalf("run %s: got %s, want %s", run.ID, run.Status, want)
+			}
+		}
+	}
+	wantNext := first.AddDate(0, 0, 4)
+	if next := h.schedule().NextRunAt; next == nil || !next.Equal(wantNext) {
+		t.Fatalf("execution delay shifted schedule: %v, want %v", next, wantNext)
+	}
 }

@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -294,6 +295,121 @@ func TestSetScheduleNextRunOnlyMovesForward(t *testing.T) {
 	if next := scalar[string](t, store,
 		`SELECT next_run_at FROM schedules WHERE id = 'sched-1'`); next != formatTime(later) {
 		t.Fatalf("a stale reconciliation moved next_run_at back to %q", next)
+	}
+}
+
+func TestCatchUpRejectsAStaleDistinctOccurrence(t *testing.T) {
+	t.Parallel()
+	for _, newerFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint(newerFirst), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			store := openTestStore(t)
+			if _, err := store.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			_, sched := scheduleFixture(t, store)
+			first := intentFor("older", "older-key")
+			second := occurrenceIntent("newer", "newer-key", "2026-09-08T02:30", first.NextRunAt.AddDate(0, 0, 1))
+			for _, intent := range []*ScheduledIntent{&first, &second} {
+				intent.CatchUp = []ScheduleAdvance{{ScheduleID: sched.ID,
+					ExpectedNextRunAt: *sched.NextRunAt, NominalDueAt: intent.NominalDueAt, NextRunAt: intent.NextRunAt}}
+			}
+			if newerFirst {
+				first, second = second, first
+			}
+			if claimed, err := store.ClaimScheduledRun(ctx, first); err != nil || !claimed {
+				t.Fatalf("first catch-up: %v / %v", claimed, err)
+			}
+			if claimed, err := store.ClaimScheduledRun(ctx, second); err != nil || claimed {
+				t.Fatalf("stale catch-up: %v / %v", claimed, err)
+			}
+			if count := scalar[int](t, store, `SELECT COUNT(*) FROM runs`); count != 1 {
+				t.Fatalf("one observed backlog created %d runs", count)
+			}
+			stored, err := store.Schedule(ctx, sched.ID)
+			if err != nil || stored == nil || stored.NextRunAt == nil || !stored.NextRunAt.Equal(first.NextRunAt) {
+				t.Fatalf("losing catch-up changed bookkeeping: %#v / %v", stored, err)
+			}
+		})
+	}
+}
+
+func TestCatchUpAllScheduleAdvancesAndRunRollBackTogether(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	if _, err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, sched := scheduleFixture(t, store)
+	second := sched
+	second.ID = "sched-2"
+	if err := store.CreateSchedule(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	intent := intentFor("catch-up", "catch-up-key")
+	for _, id := range []string{sched.ID, second.ID} {
+		intent.CatchUp = append(intent.CatchUp, ScheduleAdvance{ScheduleID: id,
+			ExpectedNextRunAt: *sched.NextRunAt, NominalDueAt: intent.NominalDueAt, NextRunAt: intent.NextRunAt})
+	}
+	if _, err := store.db.ExecContext(ctx, `CREATE TRIGGER fail_second_advance
+		BEFORE UPDATE ON schedules WHEN NEW.id = 'sched-2'
+		BEGIN SELECT RAISE(ABORT, 'injected advance failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimScheduledRun(ctx, intent); err == nil || claimed {
+		t.Fatalf("injected failure: %v / %v", claimed, err)
+	}
+	if count := scalar[int](t, store, `SELECT COUNT(*) FROM runs`); count != 0 {
+		t.Fatal("failed catch-up left its run committed")
+	}
+	for _, id := range []string{sched.ID, second.ID} {
+		stored, err := store.Schedule(ctx, id)
+		if err != nil || stored == nil || stored.NextRunAt == nil ||
+			!stored.NextRunAt.Equal(*sched.NextRunAt) || stored.LastNominalRunAt != "" {
+			t.Fatalf("failed catch-up changed %s: %#v / %v", id, stored, err)
+		}
+	}
+}
+
+func TestConcurrentCatchUpClaimsHaveOneWinner(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	if _, err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, sched := scheduleFixture(t, store)
+	const count = 8
+	results := make([]bool, count)
+	errors := make([]error, count)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			intent := intentFor(fmt.Sprintf("catch-up-%d", i), "same-occurrence")
+			intent.CatchUp = []ScheduleAdvance{{ScheduleID: sched.ID,
+				ExpectedNextRunAt: *sched.NextRunAt, NominalDueAt: intent.NominalDueAt, NextRunAt: intent.NextRunAt}}
+			<-start
+			results[i], errors[i] = store.ClaimScheduledRun(ctx, intent)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	winners := 0
+	for i := range results {
+		if errors[i] != nil {
+			t.Fatal(errors[i])
+		}
+		if results[i] {
+			winners++
+		}
+	}
+	if winners != 1 || scalar[int](t, store, `SELECT COUNT(*) FROM runs`) != 1 {
+		t.Fatalf("concurrent catch-up had %d winners", winners)
 	}
 }
 

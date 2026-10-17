@@ -3,7 +3,9 @@ package backup
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/bejusxd/rotup/internal/adapters/sqlite"
 	"github.com/bejusxd/rotup/internal/domain"
 )
 
@@ -57,6 +59,71 @@ func TestRecoverSweepsEveryActiveStatus(t *testing.T) {
 			if backup := h.backupRun(runID); backup.VerifiedSnapshotID != "" ||
 				backup.Durability == domain.DurabilityAdopted {
 				t.Fatalf("the sweep adopted a snapshot from %s: %#v", status, backup)
+			}
+		})
+	}
+}
+
+// M5 records an intent before choosing a disk or creating backup_runs metadata.
+// This real persistence shape was absent from the earlier recovery tests.
+func TestRecoverScheduledIntentWithoutBackupMetadata(t *testing.T) {
+	t.Parallel()
+	for _, status := range domain.ActiveRunStatuses() {
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			h := newHarness(t)
+			h.establishRepository()
+			job := domain.Job{ID: "scheduled-job", Name: "scheduled", Kind: domain.JobKindBackupLatest,
+				Enabled: true, TimeoutSeconds: 3600, CreatedAt: h.now, UpdatedAt: h.now}
+			if err := h.store.CreateJob(ctx, job); err != nil {
+				t.Fatal(err)
+			}
+			sched := domain.Schedule{ID: "scheduled-schedule", JobID: job.ID, Enabled: true,
+				DaysOfWeekMask: 127, LocalTime: "12:00", Timezone: "UTC", CreatedAt: h.now, UpdatedAt: h.now}
+			if err := h.store.CreateSchedule(ctx, sched); err != nil {
+				t.Fatal(err)
+			}
+			run := domain.Run{ID: "scheduled-intent", Kind: domain.RunKindBackupLatest,
+				TriggerKind: domain.RunTriggerScheduled, Status: status, RequestedAt: h.now, UpdatedAt: h.now}
+			if claimed, err := h.store.ClaimScheduledRun(ctx, sqlite.ScheduledIntent{
+				Run: run, ScheduleID: sched.ID, JobID: job.ID, IdempotencyKey: "scheduled-key",
+				NominalDueAt: "2026-09-04T12:00", NextRunAt: h.now.Add(24 * time.Hour),
+			}); err != nil || !claimed {
+				t.Fatalf("claim: %v / %v", claimed, err)
+			}
+			report, err := h.service.Recover(ctx)
+			if err != nil || report.InterruptedRuns != 1 || report.RepositoriesSuspected != 0 {
+				t.Fatalf("recover metadata-free intent: %#v / %v", report, err)
+			}
+			if got := h.run(run.ID); got.Status != domain.RunStatusInterrupted || got.FinishedAt.IsZero() {
+				t.Fatalf("unswept intent: %#v", got)
+			}
+			if metadata, err := h.store.BackupRun(ctx, run.ID); err != nil || metadata != nil {
+				t.Fatalf("sweep invented backup metadata: %#v / %v", metadata, err)
+			}
+			if h.repositoryNow().Health != domain.RepositoryHealthy {
+				t.Fatal("untouched repository became suspect")
+			}
+			active, err := h.store.ActiveRepositoryRuns(ctx)
+			if err != nil || len(active) != 0 {
+				t.Fatalf("active intents remain: %#v / %v", active, err)
+			}
+			events, err := h.store.ListEvents(ctx, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, event := range events {
+				if event.RunID == run.ID && event.EventType == "repository.recovery_started" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("interruption has no audit event")
+			}
+			if again, err := h.service.Recover(ctx); err != nil || again != (RecoveryReport{}) {
+				t.Fatalf("repeated recovery: %#v / %v", again, err)
 			}
 		})
 	}
