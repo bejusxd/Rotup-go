@@ -605,3 +605,24 @@ passes. Regression coverage includes operation/status changes, late registration
 same-pass ties, busy reconnects, restart, enumeration errors, device rename,
 UUID case normalization, duplicate UUID refusal and persistence failure/retry.
 The automatic selector and dispatcher are still not wired into the daemon.
+
+## 13. Collection persistence safety — 2026-10-18
+
+Fault injection reproduced two false-success paths: a failed source/result
+transaction still produced a successful aggregate run, and a failed RUNNING
+update still allowed collection to mutate staging and later finish successfully.
+Both are now fail-closed. Work does not start after a failed RUNNING update.
+A failed result commit produces `collection_result_persistence_failed`, retains
+the bytes and marks potentially mutated staging RECOVERY_REQUIRED, with durable
+work-marker evidence. An untouched previous publication is not invalidated.
+If final writes are all unavailable, the existing RUNNING/UPDATING state remains
+for conservative startup recovery, not success. A failed terminal run commit is
+not logged as successful completion. Automatic retry/chaining remains unenabled.
+
+Linux validation passed: full `go test ./... -count=1`, `go vet ./...`, daemon
+and helper builds to `.cache/m5-review`, collector race tests (including the
+additional fault-injection regressions), and the unchanged real-restic
+process-crash/sweep/adoption spike (17.37 s). The spike uses disposable local
+storage and a fake media lease, not physical USB acceptance. No live data or
+runtime configuration was changed. Next: automatic target selection and the
+durable prepared-run/dispatcher integration described above.

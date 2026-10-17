@@ -506,3 +506,16 @@ Restart preserves last-known history; connections outside observation coverage
 cannot be reconstructed, and same-pass discoveries tie. UUID safety is unchanged.
 Focused Linux race tests and vet pass. Automatic selection/execution is not yet
 enabled; M5 runtime dispatch and UI remain the next substantial work.
+
+### Collection success boundary hardened — 2026-10-18
+
+Reproduced and fixed false success after failed source/result persistence and
+execution after a failed RUNNING update. Failed finalization keeps bytes and
+recovery evidence, never grants success; failures before mutation preserve the
+previous good staging. Tests also cover a failed terminal commit and total
+finalization write failure followed by the existing startup sweep.
+Full Linux Go tests, vet and both builds pass; collector race checks pass;
+the unchanged real-restic crash/sweep/adoption spike passes (17.37 s).
+This does not enable the scheduler or finish M5. Runtime dispatch, selection,
+retry/waiting/timeouts, chaining and jobs UI remain. Hardware acceptance and
+escrow drill remain deferred; no live deployment was performed.

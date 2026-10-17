@@ -219,7 +219,9 @@ func (s *Service) executeConnectionTest(ctx context.Context, run domain.Run, sou
 	run.Status = domain.RunStatusRunning
 	run.StartedAt = s.now()
 	run.Summary = "testing the connection"
-	s.saveRun(ctx, run)
+	if err := s.saveRun(ctx, run); err != nil {
+		return
+	}
 
 	credential, err := s.credentialFor(ctx, source)
 	if err != nil {
@@ -255,7 +257,9 @@ func (s *Service) executeCollection(ctx context.Context, run domain.Run, source 
 	run.Status = domain.RunStatusRunning
 	run.StartedAt = started
 	run.Summary = "collecting"
-	s.saveRun(ctx, run)
+	if err := s.saveRun(ctx, run); err != nil {
+		return
+	}
 
 	outcome := s.collect(ctx, run, source, started)
 	s.finishCollection(ctx, run, source, outcome)
@@ -532,16 +536,6 @@ func (s *Service) finishCollection(ctx context.Context, run domain.Run, source d
 	outcome.Result.Status = outcome.Status
 	outcome.Result.Warnings = outcome.Warnings
 
-	if outcome.Phase != staging.PhasePublished {
-		if workDir, err := s.layout.WorkDir(source.ID, run.ID); err == nil {
-			if marker, ok, readErr := staging.ReadMarker(workDir); readErr == nil && ok {
-				marker.Phase = outcome.Phase
-				marker.Note = safeMessage(outcome.Err)
-				_ = staging.WriteMarker(workDir, marker)
-			}
-		}
-	}
-
 	updated := source
 	updated.StagingStatus = outcome.StagingStatus
 	updated.LastCollectionRunID = run.ID
@@ -552,6 +546,33 @@ func (s *Service) finishCollection(ctx context.Context, run domain.Run, source d
 	}
 	if err := s.store.SaveSourceResult(ctx, outcome.Result, &updated); err != nil {
 		s.logger.Error("collection result could not be persisted", "run_id", run.ID, "error", err)
+		outcome.Err = domain.WrapError(domain.ErrClassInternal, "collection_result_persistence_failed",
+			"the collection result could not be saved; this run is not confirmed successful", err)
+		outcome.Status = domain.RunStatusFailed
+		if outcome.Published || outcome.MutationPossible {
+			// Bytes and the publication marker may already be durable, but the
+			// source/result transaction is not confirmed. Preserve the data and
+			// fail closed rather than granting success to downstream work.
+			outcome.Published = false
+			outcome.MutationPossible = true
+			outcome.StagingStatus = domain.StagingRecoveryRequired
+			outcome.Phase = staging.PhaseFailedAfterMutation
+			if stateErr := s.store.SetSourceStagingStatus(ctx, source.ID, domain.StagingRecoveryRequired); stateErr != nil {
+				s.logger.Error("unconfirmed collection could not be marked for recovery", "run_id", run.ID, "error", stateErr)
+			}
+		}
+	}
+
+	if outcome.Phase != staging.PhasePublished {
+		if workDir, err := s.layout.WorkDir(source.ID, run.ID); err == nil {
+			if marker, ok, readErr := staging.ReadMarker(workDir); readErr == nil && ok {
+				marker.Phase = outcome.Phase
+				marker.Note = safeMessage(outcome.Err)
+				if err := staging.WriteMarker(workDir, marker); err != nil {
+					s.logger.Error("collection recovery marker could not be saved", "run_id", run.ID, "error", err)
+				}
+			}
+		}
 	}
 
 	run.Status = outcome.Status
@@ -575,7 +596,9 @@ func (s *Service) finishCollection(ctx context.Context, run domain.Run, source d
 	} else {
 		run.Summary = outcome.Summary
 	}
-	s.saveRun(ctx, run)
+	if err := s.saveRun(ctx, run); err != nil {
+		return
+	}
 
 	s.logger.Info("collection finished",
 		"run_id", run.ID,
@@ -631,10 +654,12 @@ func (s *Service) credentialFor(ctx context.Context, source domain.Source) (port
 	return ports.CredentialHandle{Locator: ref.ProviderLocator}, nil
 }
 
-func (s *Service) saveRun(ctx context.Context, run domain.Run) {
+func (s *Service) saveRun(ctx context.Context, run domain.Run) error {
 	if err := s.store.UpdateRun(ctx, run); err != nil {
 		s.logger.Error("run state could not be persisted", "run_id", run.ID, "error", err)
+		return err
 	}
+	return nil
 }
 
 func (s *Service) finishRunWithError(ctx context.Context, run domain.Run, err error, fallback string) {
