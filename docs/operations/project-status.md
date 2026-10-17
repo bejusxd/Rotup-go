@@ -495,3 +495,14 @@ No runtime scheduler is enabled by this checkpoint. Next: connection-recency
 correctness, then prepared-run execution and durable dispatch/retry/waiting.
 The existing collection result-save error path needs review before chaining.
 M5, real USB acceptance and deployment remain incomplete.
+
+### Connection recency fixed — 2026-10-17
+
+Fixed reproduced timestamp defects before automatic disk selection: mount/status
+changes no longer count as a new connection; registration preserves an earlier
+observation; reconnects observed during a busy lease are retained. Reconciliation
+reports failed persistence and retries without moving the observation time.
+Restart preserves last-known history; connections outside observation coverage
+cannot be reconstructed, and same-pass discoveries tie. UUID safety is unchanged.
+Focused Linux race tests and vet pass. Automatic selection/execution is not yet
+enabled; M5 runtime dispatch and UI remain the next substantial work.

@@ -38,11 +38,12 @@ type Service struct {
 	// resource coordinator arrives with the scheduler.
 	locks *keyedLocks
 
-	// knownMedia remembers which UUIDs were present at the last reconciliation
-	// so that detection and removal are reported once each, rather than on
-	// every poll.
-	mediaMu    sync.Mutex
-	knownMedia map[string]bool
+	// Serialize connection observations and their persistence. Snapshot and
+	// mount identity checks never update this history. Values are connection
+	// epochs, not polling, registration or operation-completion timestamps.
+	mediaMu                sync.Mutex
+	knownMedia             map[string]time.Time
+	connectionsInitialized bool
 }
 
 // Options configures the service.
@@ -71,7 +72,7 @@ func New(options Options) *Service {
 		logger:     logger.With("component", component),
 		now:        now,
 		locks:      newKeyedLocks(),
-		knownMedia: make(map[string]bool),
+		knownMedia: make(map[string]time.Time),
 	}
 }
 
@@ -110,6 +111,8 @@ func (s *Service) observe(ctx context.Context) (observation, error) {
 // Disks with a media operation in flight are skipped: their status belongs to
 // that operation until it finishes.
 func (s *Service) Reconcile(ctx context.Context) error {
+	s.mediaMu.Lock()
+	defer s.mediaMu.Unlock()
 	current, err := s.observe(ctx)
 	if err != nil {
 		return err
@@ -119,7 +122,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return err
 	}
 
-	s.reportMediaChanges(ctx, current.Media)
+	s.reportMediaChanges(ctx, current.Media, disks)
 
 	for _, disk := range disks {
 		if s.locks.held(disk.ID) {
@@ -127,7 +130,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		}
 		expected, _ := s.mounts.MountPointFor(disk.ID)
 		result := evaluate(disk, current.Media, current.Mounts, expected)
-		s.applyEvaluation(ctx, disk, result)
+		if err := s.applyEvaluation(ctx, disk, result); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -135,9 +140,12 @@ func (s *Service) Reconcile(ctx context.Context) error {
 // applyEvaluation persists a derived status, but only when something actually
 // changed. Writing an unchanged row on every poll would turn the event log into
 // a stream of noise.
-func (s *Service) applyEvaluation(ctx context.Context, disk domain.Disk, result evaluation) {
-	if disk.CurrentStatus == result.Status && disk.LastErrorCode == result.ErrorCode {
-		return
+func (s *Service) applyEvaluation(ctx context.Context, disk domain.Disk, result evaluation) error {
+	connectedAt, present := s.knownMedia[disk.FilesystemUUID]
+	connectionChanged := present && (disk.LastConnectedAt == nil || !disk.LastConnectedAt.Equal(connectedAt))
+	statusChanged := disk.CurrentStatus != result.Status || disk.LastErrorCode != result.ErrorCode
+	if !statusChanged && !connectionChanged {
+		return nil
 	}
 	state := domain.DiskState{
 		ID:        disk.ID,
@@ -145,15 +153,18 @@ func (s *Service) applyEvaluation(ctx context.Context, disk domain.Disk, result 
 		ErrorCode: result.ErrorCode,
 	}
 	now := s.now()
-	if result.Connected() && !disk.CurrentStatus.Mounted() {
-		state.LastConnectedAt = &now
+	if connectionChanged {
+		state.LastConnectedAt = &connectedAt
 	}
 	if result.Status == domain.DiskDisconnected && disk.CurrentStatus != domain.DiskDisconnected {
 		state.LastDisconnectedAt = &now
 	}
 	if err := s.store.SaveDiskState(ctx, state); err != nil {
 		s.logger.Error("disk state could not be persisted", "disk_id", disk.ID, "error", err)
-		return
+		return err
+	}
+	if !statusChanged {
+		return nil
 	}
 
 	s.logger.Info("disk state changed",
@@ -175,26 +186,47 @@ func (s *Service) applyEvaluation(ctx context.Context, disk domain.Disk, result 
 		s.event(ctx, domain.SeverityError, "disk.error", disk.ID,
 			map[string]any{"error_code": result.ErrorCode})
 	}
+	return nil
 }
 
-// reportMediaChanges emits one event when an unregistered filesystem appears or
-// disappears, using an in-memory set so a periodic poll does not repeat itself.
-func (s *Service) reportMediaChanges(ctx context.Context, media []domain.ObservedMedia) {
-	present := make(map[string]bool, len(media))
+// reportMediaChanges records observed connections, including unregistered media
+// and busy disks. Caller holds mediaMu across observation and persistence. At
+// startup preserve the last known epoch of an already-connected disk: physical
+// connection order while the daemon was stopped cannot be inferred. Filesystems
+// first seen in one pass tie; device names and enumeration order are irrelevant.
+func (s *Service) reportMediaChanges(ctx context.Context, media []domain.ObservedMedia, disks []domain.Disk) {
+	previous := s.knownMedia
+	seed := make(map[string]time.Time)
+	if !s.connectionsInitialized {
+		for _, disk := range disks {
+			if disk.CurrentStatus != domain.DiskDisconnected && disk.LastConnectedAt != nil &&
+				(disk.LastDisconnectedAt == nil || disk.LastDisconnectedAt.Before(*disk.LastConnectedAt)) {
+				seed[disk.FilesystemUUID] = *disk.LastConnectedAt
+			}
+		}
+	}
+	now := s.now()
+	present := make(map[string]time.Time, len(media))
 	for _, item := range media {
-		if item.FilesystemUUID != "" {
-			present[item.FilesystemUUID] = true
+		uuid := domain.NormalizeFilesystemUUID(item.FilesystemUUID)
+		if uuid != "" {
+			connectedAt, exists := previous[uuid]
+			if !exists {
+				connectedAt = now
+				if prior, ok := seed[uuid]; ok {
+					connectedAt = prior
+				}
+			}
+			present[uuid] = connectedAt
 		}
 	}
 	ambiguous := ambiguousUUIDs(media)
 
-	s.mediaMu.Lock()
-	previous := s.knownMedia
 	s.knownMedia = present
-	s.mediaMu.Unlock()
+	s.connectionsInitialized = true
 
 	for uuid := range present {
-		if !previous[uuid] {
+		if _, existed := previous[uuid]; !existed {
 			severity := domain.SeverityInfo
 			payload := map[string]any{"filesystem_uuid": uuid}
 			if count, duplicated := ambiguous[uuid]; duplicated {
@@ -207,7 +239,7 @@ func (s *Service) reportMediaChanges(ctx context.Context, media []domain.Observe
 		}
 	}
 	for uuid := range previous {
-		if !present[uuid] {
+		if _, exists := present[uuid]; !exists {
 			s.event(ctx, domain.SeverityInfo, "media.removed", "",
 				map[string]any{"filesystem_uuid": uuid})
 		}

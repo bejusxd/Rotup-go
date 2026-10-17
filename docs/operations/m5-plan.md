@@ -580,3 +580,28 @@ Automatic execution, waiting/retry persistence, timeout wiring, disk selection,
 chaining and jobs UI remain unfinished. Review collection result-persistence
 errors before enabling scheduled execution; logging an error alone must not
 grant a successful result to a chained backup.
+
+## 12. Connection-recency prerequisite — 2026-10-17
+
+Three failures were reproduced: mounting refreshed `last_connected_at`, late
+registration replaced the first observation time, and a reconnect observed while
+a disk lease was busy was lost. Connection epochs now follow successful media
+observations, independently of mount/status transitions. Reconciliation and
+registration serialize these observations; busy disks retain their new epoch
+until it can be persisted. Failed persistence is reported and retried with the
+original observed time. UI snapshots remain read-only. UUID verification and
+mount behaviour are unchanged.
+
+At restart, preserve the last known epoch for a previously connected disk.
+Connections while the daemon was stopped, or detach/reattach entirely between
+successful observations, cannot be ordered reliably. Newly observed filesystems
+in one pass tie. Historical timestamps written by older releases cannot be
+reconstructed. No claim of exact physical plug time is made. Selection must use
+fresh eligible-media observations and a deterministic tie-break, never a device
+node, registration time or backup completion time.
+
+Linux race tests pass for removable, coordinator and collector; focused vet
+passes. Regression coverage includes operation/status changes, late registration,
+same-pass ties, busy reconnects, restart, enumeration errors, device rename,
+UUID case normalization, duplicate UUID refusal and persistence failure/retry.
+The automatic selector and dispatcher are still not wired into the daemon.

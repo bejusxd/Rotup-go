@@ -13,6 +13,8 @@ import (
 // never formats or repartitions, and never changes a filesystem UUID. Unknown
 // media stays observe-only until an administrator does exactly this.
 func (s *Service) Register(ctx context.Context, filesystemUUID, name string) (string, error) {
+	s.mediaMu.Lock()
+	defer s.mediaMu.Unlock()
 	uuid, err := domain.ValidateFilesystemUUID(filesystemUUID)
 	if err != nil {
 		return "", err
@@ -54,6 +56,12 @@ func (s *Service) Register(ctx context.Context, filesystemUUID, name string) (st
 			"ROTUP does not manage "+observed.FilesystemType+" media; supported filesystems are "+
 				supportedList())
 	}
+	disks, err := s.store.ListDisks(ctx)
+	if err != nil {
+		return "", err
+	}
+	s.reportMediaChanges(ctx, current.Media, disks)
+	connectedAt := s.knownMedia[uuid]
 
 	id, err := domain.NewID()
 	if err != nil {
@@ -67,7 +75,7 @@ func (s *Service) Register(ctx context.Context, filesystemUUID, name string) (st
 		FilesystemType:    observed.FilesystemType,
 		Enabled:           true,
 		FirstRegisteredAt: now,
-		LastConnectedAt:   &now,
+		LastConnectedAt:   &connectedAt,
 		CurrentStatus:     domain.DiskAvailableUnmounted,
 		UpdatedAt:         now,
 	}
@@ -412,8 +420,6 @@ func (s *Service) setStatus(ctx context.Context, diskID string, status domain.Di
 	switch status {
 	case domain.DiskDisconnected:
 		state.LastDisconnectedAt = &now
-	case domain.DiskReady, domain.DiskAvailableUnmounted:
-		state.LastConnectedAt = &now
 	}
 	if err := s.store.SaveDiskState(ctx, state); err != nil {
 		s.logger.Error("disk state could not be persisted", "disk_id", diskID, "error", err)
