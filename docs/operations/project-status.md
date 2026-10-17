@@ -483,3 +483,15 @@ daemon: this checkpoint does not enable automatic backups or finish M5.
 Application startup must sweep -> Reconcile -> CatchUp once, then Tick normally.
 Physical USB acceptance and escrow/recovery drill remain deferred; no deployment
 or production-readiness claim is made.
+
+### Resource coordinator foundation — 2026-10-17
+
+Added a small coordinator over the existing staging barrier, source locks and
+disk leases, with ordered acquisition, rollback, cancellable contention waits
+and separate staging/disk release boundaries. Manual collection uses the same
+source-lock seam; its behaviour is unchanged. Focused coordinator/collector race
+tests and vet pass, including an integration regression for shared manual locks.
+No runtime scheduler is enabled by this checkpoint. Next: connection-recency
+correctness, then prepared-run execution and durable dispatch/retry/waiting.
+The existing collection result-save error path needs review before chaining.
+M5, real USB acceptance and deployment remain incomplete.

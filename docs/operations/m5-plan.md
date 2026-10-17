@@ -558,3 +558,25 @@ SQLite, and the unchanged real-restic process-crash/sweep/adoption spike.
 Next: slice 4 (resource coordination), then slice 5 (runtime dispatch, latest
 observed connection preference, waiting/retry/timeouts) and slice 6 (chaining and
 UI). Keep the existing manual paths and the M4 durability boundary intact.
+
+## 11. Resource coordinator foundation — 2026-10-17
+
+`internal/coordinator` now wraps the actual staging barrier, collection service
+source locks and media disk leases. Acquisitions are staging first, then source
+or disk; any failed partial acquisition rolls back. Cancellable waits retry only
+known contention, release partial resources between attempts and start no
+background goroutines. Backup staging can be released before final disk cleanup
+without releasing the disk lease. Releases are idempotent.
+
+Tests cover exclusion, parallel distinct-source collection, cancellation, late
+cancellation, partial rollback, stale releases, mixed contention and the actual
+collector/manual source-lock seam. Focused Linux race tests and vet pass.
+
+This is a tested foundation, NOT runtime integration. Existing manual workflows
+are unchanged. The dispatcher must pass acquired resources into a prepared-run
+execution seam, not call `StartBackup` or `StartCollection` while already holding
+their resources (which would double-acquire locks and create a second run).
+Automatic execution, waiting/retry persistence, timeout wiring, disk selection,
+chaining and jobs UI remain unfinished. Review collection result-persistence
+errors before enabling scheduled execution; logging an error alone must not
+grant a successful result to a chained backup.

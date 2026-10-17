@@ -112,6 +112,18 @@ func (s *Service) Busy(sourceID string) bool {
 	return s.locks.held(sourceID) || s.barrier.BeingRead(sourceID)
 }
 
+// TryAcquireSource shares manual-operation exclusion with the scheduled-work
+// coordinator. The coordinator takes staging first and never waits with a
+// partially acquired resource set. A granted release is idempotent.
+func (s *Service) TryAcquireSource(sourceID string) (func(), error) {
+	release, ok := s.locks.tryAcquire(sourceID)
+	if !ok {
+		return nil, domain.NewError(domain.ErrClassUnavailable, "source_busy",
+			"another operation is already running for this source")
+	}
+	return release, nil
+}
+
 // StartConnectionTest creates a durable connection-test run and executes it in
 // the background. It returns the run identifier immediately.
 func (s *Service) StartConnectionTest(ctx context.Context, sourceID string) (string, error) {
@@ -142,10 +154,9 @@ func (s *Service) start(ctx context.Context, sourceID string, kind domain.RunKin
 
 	// The exclusive per-source lock is taken before the run row exists so that
 	// a rejected request never leaves an orphaned PENDING run behind.
-	release, ok := s.locks.tryAcquire(sourceID)
-	if !ok {
-		return "", domain.NewError(domain.ErrClassUnavailable, "source_busy",
-			"another operation is already running for this source")
+	release, err := s.TryAcquireSource(sourceID)
+	if err != nil {
+		return "", err
 	}
 
 	// A collection reconciles the source's current tree and its revision area,

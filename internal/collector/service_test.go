@@ -11,9 +11,44 @@ import (
 	"testing"
 
 	"github.com/bejusxd/rotup/internal/adapters/sqlite"
+	"github.com/bejusxd/rotup/internal/coordinator"
 	"github.com/bejusxd/rotup/internal/domain"
 	"github.com/bejusxd/rotup/internal/staging"
 )
+
+func TestCoordinatorAndManualOperationsShareSourceLock(t *testing.T) {
+	h := newHarness(t, domain.PolicyArchiveThenSync)
+	ctx := context.Background()
+	barrier := staging.NewBarrier()
+	h.service.barrier = barrier
+	c := coordinator.New(barrier, h.service, nil)
+	release, err := c.TryCollection(ctx, h.source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, err := h.service.StartConnectionTest(ctx, h.source.ID); !coordinator.Busy(err) {
+		t.Fatalf("manual connection test bypassed scheduled source lock: %v", err)
+	}
+	release()
+	manualRelease, err := h.service.TryAcquireSource(h.source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manualRelease()
+	if _, err := c.TryCollection(ctx, h.source.ID); !coordinator.Busy(err) {
+		t.Fatalf("coordinator bypassed manual source lock: %v", err)
+	}
+	if barrier.Mutating(h.source.ID) {
+		t.Fatal("failed acquisition leaked the staging barrier")
+	}
+	manualRelease()
+	release, err = c.TryCollection(ctx, h.source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+}
 
 // harness wires the collector against a real SQLite store, a real staging
 // layout on a temporary directory, and the filesystem-backed fake engine.
