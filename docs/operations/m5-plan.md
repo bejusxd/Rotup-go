@@ -626,3 +626,56 @@ process-crash/sweep/adoption spike (17.37 s). The spike uses disposable local
 storage and a fake media lease, not physical USB acceptance. No live data or
 runtime configuration was changed. Next: automatic target selection and the
 durable prepared-run/dispatcher integration described above.
+
+## 14. Automatic target selection — 2026-10-18
+
+`orchestrator.SelectBackupTarget` now implements the user's latest-connected
+preference. It reconciles and takes a fresh media snapshot before ranking, checks
+enabled/registered/unique/unmounted/writable media, matching registered and
+repository UUIDs, established healthy repositories, and unfinished backup writes.
+It excludes busy, read-only, externally mounted, suspect and unproven targets.
+Known connection times precede unknown ones; ties use repository ID. Registration
+order, device node and latest backup do not influence priority. Nil target means
+no eligible resource, not an attempted/failed backup. Observation or persistence
+errors abort selection rather than using stale data.
+
+Selection grants no write authority. The executor must still acquire resources
+and repeat the existing repository/unfinished-write checks under the disk lease,
+then perform the unchanged privileged UUID verification and repository identity
+verification. Manual requests must keep their explicit target. No automatic
+mount, unlock or recovery was added. This function is not yet called by app.Run.
+
+Tests cover ordering, ties, absent media, exclusions and observation/persistence
+failures. An integration regression uses the real media service and SQLite
+history with fake device observations: B wins after connection, A wins only after
+an observed reconnect, and a lease on A temporarily makes B the eligible target.
+It performs no privileged mount and is not physical media acceptance.
+
+### Exact next implementation checkpoint
+
+Do not start a second manual run for each durable scheduled intent. Add the
+prepared-run execution seam and dispatcher together, reusing existing workflows:
+
+1. Read persisted job/run orchestration metadata and job source membership;
+   retain each run's nominal occurrence and audit identity.
+2. Acquire resources through the coordinator before handing work to an existing
+   service; do not double-acquire them through `StartCollection`/`StartBackup`.
+   Multi-source collection must save individual results and finish the aggregate
+   only once. Chaining must depend on committed results, not an in-memory return.
+3. Persist waiting/retry/attempt transitions atomically. Missing media and lock
+   contention consume no attempt. Preserve queued occurrences; do not supersede
+   them when an older occurrence is still active. Keep backup read-set capture at
+   execution (BACKUP_LATEST), not at the nominal time.
+4. Test cancellation, timeouts, stale claims, failure writes and restart with
+   both untouched intents and interrupted restic writes. Never automatically
+   retry an unproven repository or remove its locks.
+5. Wire startup recovery -> Reconcile -> CatchUp once -> ordinary Tick/dispatch,
+   with bounded workers, daemon cancellation and joined shutdown. Only then add
+   job/schedule API and UI plus collection-to-backup chaining.
+
+M5 is still incomplete; physical USB acceptance and escrow drill remain separate.
+
+Checkpoint validation: all tracked Go files formatted; fresh Linux full suite
+(`go test ./... -count=1`), `go vet ./...`, daemon/helper builds and focused
+orchestrator/removable race tests passed. Build outputs are confined to
+`.cache/m5-review`; the tracked helper artifact and architecture are unchanged.

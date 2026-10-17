@@ -519,3 +519,24 @@ the unchanged real-restic crash/sweep/adoption spike passes (17.37 s).
 This does not enable the scheduler or finish M5. Runtime dispatch, selection,
 retry/waiting/timeouts, chaining and jobs UI remain. Hardware acceptance and
 escrow drill remain deferred; no live deployment was performed.
+
+### Latest-connected target selector — 2026-10-18
+
+Implemented and tested the selection function over fresh media observations:
+latest connected eligible disk wins; busy, ambiguous, read-only, mounted,
+uninitialized, suspect or unfinished-write targets do not. Ties use stable IDs.
+Tests include real SQLite connection history and the actual media service with
+fake device observations. Selection does not mount or bypass identity checks.
+It is not yet wired into the daemon, so no automatic backups are enabled.
+
+Next agent: follow `m5-plan.md` section 14's prepared-run/dispatcher checkpoint.
+Do not reroute scheduled intents through manual Start methods or invent a second
+run ID. Preserve queued nominal occurrences, per-source outcomes, M4 success
+boundaries and explicit recovery. Runtime dispatch/retry/waiting/timeouts,
+chaining, jobs API/UI and physical acceptance still remain.
+
+Final checkpoint checks: fresh full Linux Go suite, vet, both builds and focused
+orchestrator/removable race tests passed. Working changes are committed in small
+checkpoints. No frontend code changed in these M5 prerequisites; frontend/browser
+validation was not repeated. No production readiness or hardware acceptance is
+claimed.
