@@ -12,6 +12,21 @@ BACKUP_LATEST runs and explicit interrupted-backup recovery are available.
 Scheduling, rotation, email and retention are later milestones and are
 deliberately not implemented.
 
+## Install on a Linux machine
+
+Download the archive for your architecture from the
+[Releases](../../releases) page, then:
+
+```sh
+tar xzf rotup-<version>-linux-<arch>.tar.gz && cd rotup-<version>-linux-<arch>
+sudo ./install.sh --install-deps
+```
+
+Any systemd-based Linux, amd64 or arm64, works. The full path from install to a
+verified restore and a nightly schedule is in
+[packaging/INSTALL.md](packaging/INSTALL.md). To build the archives yourself:
+`sh scripts/build-release.sh` (output in `dist/`).
+
 ## Run locally
 
 ```sh
