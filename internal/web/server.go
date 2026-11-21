@@ -102,6 +102,8 @@ type Deps struct {
 	Staging    StagingBrowser
 	Media      Media
 	Backups    Backups
+	// Jobs configures scheduled work. Nil hides the jobs API.
+	Jobs Jobs
 	// SystemInspect reports host integration readiness for the setup page. A
 	// nil inspector means the daemon cannot check, which the API states rather
 	// than reporting a ready system it did not verify.

@@ -531,6 +531,13 @@ func (s *Service) collect(ctx context.Context, run domain.Run, source domain.Sou
 // run row. The source's durable staging state is advanced in the same
 // transaction as the result so the two can never disagree.
 func (s *Service) finishCollection(ctx context.Context, run domain.Run, source domain.Source, outcome collectOutcome) {
+	outcome = s.persistCollectionResult(ctx, run, source, outcome)
+	s.finishCollectionRun(ctx, run, source, outcome)
+}
+
+// persistCollectionResult is shared by manual and multi-source job execution.
+// It commits one source, never the aggregate run.
+func (s *Service) persistCollectionResult(ctx context.Context, run domain.Run, source domain.Source, outcome collectOutcome) collectOutcome {
 	finished := s.now()
 	outcome.Result.FinishedAt = finished
 	outcome.Result.Status = outcome.Status
@@ -575,8 +582,12 @@ func (s *Service) finishCollection(ctx context.Context, run domain.Run, source d
 		}
 	}
 
+	return outcome
+}
+
+func (s *Service) finishCollectionRun(ctx context.Context, run domain.Run, source domain.Source, outcome collectOutcome) {
 	run.Status = outcome.Status
-	run.FinishedAt = finished
+	run.FinishedAt = s.now()
 	run.SummaryJSON = encodeSummary(outcome.Metrics)
 	if outcome.Err != nil {
 		var typed *domain.Error

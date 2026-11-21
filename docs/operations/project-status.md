@@ -535,6 +535,25 @@ run ID. Preserve queued nominal occurrences, per-source outcomes, M4 success
 boundaries and explicit recovery. Runtime dispatch/retry/waiting/timeouts,
 chaining, jobs API/UI and physical acceptance still remain.
 
+### Dispatcher wired and jobs API — 2026-11-21
+
+The prepared-run seam and dispatcher (written 2026-10-26, uncommitted and not
+compiling at that point) are fixed and committed on `m5/dispatcher-jobs-api`.
+Startup is sweep -> resume untouched intents -> Reconcile -> CatchUp once ->
+ordinary Tick + dispatch loops. Added `/api/v1/jobs` (list, create, enable,
+run now); job timeouts default to the daemon's collection/backup timeouts.
+
+Validation: full WSL `go vet ./...` and `go test ./... -count=1` pass. Live
+smoke test on a throwaway database: job creation, `nextRunAt` in
+Europe/Warsaw, invalid-config rejection, manual run claimed by the dispatcher,
+SIGTERM mid-run leaves `INTERRUPTED`/`daemon_stopping` with attempt 1, and a
+restart does not resume it. No real SMB, restic or USB was exercised here.
+
+Still missing for M5: jobs UI, `SUPERSEDED` coalescing, more than one worker,
+schedule editing (must recompute `next_run_at`). Physical USB acceptance and
+the escrow drill remain open. This build is for end-to-end testing, not
+production.
+
 Final checkpoint checks: fresh full Linux Go suite, vet, both builds and focused
 orchestrator/removable race tests passed. Working changes are committed in small
 checkpoints. No frontend code changed in these M5 prerequisites; frontend/browser

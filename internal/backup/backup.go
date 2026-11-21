@@ -118,6 +118,11 @@ func (s *Service) StartBackup(ctx context.Context, repositoryID string, sourceID
 // step be proven before the next depends on it.
 func (s *Service) executeBackup(ctx context.Context, run domain.Run, repository domain.Repository,
 	target domain.BackupRun, lease ports.DiskLease) {
+	s.executeBackupPrepared(ctx, run, repository, target, lease, nil)
+}
+
+func (s *Service) executeBackupPrepared(ctx context.Context, run domain.Run, repository domain.Repository,
+	target domain.BackupRun, lease ports.DiskLease, releaseBarrier func()) {
 
 	refs := eventRefs{RepositoryID: repository.ID, DiskID: target.DiskID, RunID: run.ID}
 	run = s.startRun(ctx, run, "backing up")
@@ -126,7 +131,10 @@ func (s *Service) executeBackup(ctx context.Context, run domain.Run, repository 
 	// is mounted. Taking it first means the read-set cannot change between
 	// being captured and being read, which is the whole reason the barrier
 	// exists.
-	releaseBarrier, err := s.barrier.AcquireRead(target.SelectedSourceIDs)
+	var err error
+	if releaseBarrier == nil {
+		releaseBarrier, err = s.barrier.AcquireRead(target.SelectedSourceIDs)
+	}
 	if err != nil {
 		s.failBackup(ctx, run, target, refs, err, domain.StageRequested, false,
 			"the staging barrier could not be acquired")

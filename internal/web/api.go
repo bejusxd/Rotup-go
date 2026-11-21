@@ -52,6 +52,12 @@ func (h *handler) apiRoutes(root *http.ServeMux) {
 		mux.HandleFunc("POST /api/v1/repositories/{id}/backup", h.apiBackup)
 		mux.HandleFunc("POST /api/v1/repositories/{id}/recover", h.apiRecover)
 	}
+	if h.deps.Jobs != nil {
+		mux.HandleFunc("GET /api/v1/jobs", h.apiJobs)
+		mux.HandleFunc("POST /api/v1/jobs", h.apiCreateJob)
+		mux.HandleFunc("PUT /api/v1/jobs/{id}/enabled", h.apiEnableJob)
+		mux.HandleFunc("POST /api/v1/jobs/{id}/run", h.apiRunJob)
+	}
 	if h.deps.DevMode {
 		mux.HandleFunc("GET /api/v1/debug/status", h.apiDebug)
 	}

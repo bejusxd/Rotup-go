@@ -18,6 +18,7 @@ import (
 	"github.com/bejusxd/rotup/internal/collector"
 	"github.com/bejusxd/rotup/internal/config"
 	"github.com/bejusxd/rotup/internal/domain"
+	"github.com/bejusxd/rotup/internal/orchestrator"
 	"github.com/bejusxd/rotup/internal/platform/process"
 	"github.com/bejusxd/rotup/internal/removable"
 	"github.com/bejusxd/rotup/internal/secrets"
@@ -33,19 +34,21 @@ const shutdownTimeout = 10 * time.Second
 
 // Application owns the daemon lifecycle and resources.
 type Application struct {
-	cfg     config.Config
-	logger  *slog.Logger
-	store   *sqlite.Store
-	layout  *staging.Layout
-	barrier *staging.Barrier
-	secrets *secrets.FileStore
-	engine  *rclone.Engine
-	snapper *restic.Engine
-	work    *collector.Service
-	admin   *collector.Admin
-	media   *removable.Service
-	backups *backup.Service
-	server  *http.Server
+	cfg        config.Config
+	logger     *slog.Logger
+	store      *sqlite.Store
+	layout     *staging.Layout
+	barrier    *staging.Barrier
+	secrets    *secrets.FileStore
+	engine     *rclone.Engine
+	snapper    *restic.Engine
+	work       *collector.Service
+	admin      *collector.Admin
+	media      *removable.Service
+	backups    *backup.Service
+	server     *http.Server
+	planner    *orchestrator.Planner
+	dispatcher *orchestrator.Dispatcher
 
 	// workCtx bounds background work to the daemon's lifetime rather than to
 	// the HTTP request that started it, and workCancel stops it at shutdown.
@@ -183,22 +186,54 @@ func (a *Application) initialize(ctx context.Context, version string) error {
 	if err := a.media.Reconcile(ctx); err != nil {
 		a.logger.Warn("removable media could not be reconciled at startup", "error", err)
 	}
+	if err := a.store.ResumeUntouchedIntents(ctx); err != nil {
+		return err
+	}
+	a.planner = orchestrator.New(orchestrator.Options{Store: a.store, Logger: a.logger})
+	if _, err := a.planner.Reconcile(ctx); err != nil {
+		return err
+	}
+	if _, err := a.planner.CatchUp(ctx); err != nil {
+		return err
+	}
+	if err := a.store.ReconcileJobChains(ctx, time.Now().UTC()); err != nil {
+		return err
+	}
+	a.dispatcher = &orchestrator.Dispatcher{Store: a.store, Logger: a.logger, Prepare: func(ctx context.Context, item sqlite.DispatchIntent, ids []string) (func(context.Context) error, func(), error) {
+		switch item.Run.Kind {
+		case domain.RunKindCollection:
+			return a.work.PrepareJob(ctx, item.Run, ids)
+		case domain.RunKindBackupLatest:
+			target, err := orchestrator.SelectBackupTarget(ctx, a.store, a.media)
+			if err != nil {
+				return nil, nil, err
+			}
+			if target == nil {
+				return nil, nil, domain.NewError(domain.ErrClassUnavailable, "backup_media_waiting", "waiting for a connected eligible backup disk")
+			}
+			return a.backups.PrepareJob(ctx, item.Run, target.RepositoryID, ids)
+		default:
+			return nil, nil, domain.NewError(domain.ErrClassConfiguration, "job_kind_unsupported", "this job kind is not implemented")
+		}
+	}}
 
 	if err := a.recordDemoRun(ctx); err != nil {
 		return err
 	}
 
 	handler, err := web.NewHandler(web.Deps{
-		DevMode:       a.cfg.DevMode,
-		Version:       version,
-		Status:        a,
-		Repo:          a.store,
-		BackupRepo:    a.store,
-		Admin:         a.admin,
-		Runner:        a.work,
-		Staging:       layout,
-		Media:         a.media,
-		Backups:       a.backups,
+		DevMode:    a.cfg.DevMode,
+		Version:    version,
+		Status:     a,
+		Repo:       a.store,
+		BackupRepo: a.store,
+		Admin:      a.admin,
+		Runner:     a.work,
+		Staging:    layout,
+		Media:      a.media,
+		Backups:    a.backups,
+		Jobs: &orchestrator.Admin{Store: a.store,
+			CollectionTimeout: a.cfg.CollectionTimeout, BackupTimeout: a.cfg.BackupTimeout},
 		SystemInspect: a.inspectSystem,
 		Engine:        a.EngineStatus,
 		BackupEngine:  a.BackupEngineStatus,
@@ -371,6 +406,11 @@ func (a *Application) reconcileMedia() {
 func (a *Application) serve(ctx context.Context, listener net.Listener) error {
 	a.background.Add(1)
 	go a.reconcileMedia()
+	if a.planner != nil && a.dispatcher != nil {
+		a.background.Add(2)
+		go a.planJobs()
+		go a.dispatchJobs()
+	}
 	a.status.Store("running")
 	a.logger.Info("HTTP server started", "address", listener.Addr().String())
 

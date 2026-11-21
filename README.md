@@ -107,6 +107,35 @@ Manual runs execute in the daemon, not in the HTTP request. Starting one
 redirects to its run page, which refreshes itself until the run finishes;
 closing the browser cannot cancel or corrupt it.
 
+## Scheduled jobs (M5, testing build)
+
+The daemon now runs a planner and a single dispatcher worker. Jobs are
+configured through the JSON API (no UI yet); every mutation needs the CSRF token
+from `GET /api/v1/system` in `X-CSRF-Token`.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v1/jobs` | Jobs with schedules, sources and `nextRunAt` |
+| `POST /api/v1/jobs` | Create a `COLLECTION` or `BACKUP_LATEST` job and its schedule |
+| `PUT /api/v1/jobs/{id}/enabled` | `{"enabled": false}` stops a job firing |
+| `POST /api/v1/jobs/{id}/run` | Queue a manual run (`{}` body); returns `runId` |
+
+Example body for a nightly collection that chains a backup:
+
+```json
+{"name":"nightly","kind":"COLLECTION","enabled":true,"sourceIds":["<source-id>"],
+ "backupAfterCollection":true,"partialTriggersBackup":true,
+ "scheduleEnabled":true,"daysOfWeekMask":127,"localTime":"03:00","timezone":"Europe/Warsaw"}
+```
+
+`daysOfWeekMask` bit N is `time.Weekday(N)` (Sunday = 1, Monday = 2, … all = 127).
+`timeoutSeconds` 0 uses `ROTUP_COLLECTION_TIMEOUT`/`ROTUP_BACKUP_TIMEOUT`;
+`retryIntervalSeconds` 0 uses 300; omit `retryDeadlineSeconds` for one attempt.
+A backup with no eligible disk waits (`WAITING_FOR_RESOURCE`) and picks the most
+recently connected eligible disk. One worker means a long backup delays other
+jobs; occurrences are queued, never dropped. A run interrupted by shutdown is
+not resumed automatically.
+
 ## Removable media
 
 Linux is the production runtime for media management. Block devices are
