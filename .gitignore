@@ -9,3 +9,4 @@ rotup-secrets/
 # directory, so new source files there were silently untracked.
 /rotupd
 /rotupd.exe
+/rotup-mounthelper
